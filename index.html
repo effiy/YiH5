@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>文章会话</title>
+    <link rel="icon" type="image/x-icon" href="./favicon.ico" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar">
+        <div class="topbar__left">
+          <button
+            id="prevDay"
+            class="iconbtn topbar__dayBtn"
+            type="button"
+            aria-label="上一天"
+            title="上一天"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14.7 6.7a1 1 0 0 1 0 1.4L10.8 12l3.9 3.9a1 1 0 1 1-1.4 1.4l-4.6-4.6a1 1 0 0 1 0-1.4l4.6-4.6a1 1 0 0 1 1.4 0Z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="topbar__center">
+          <div class="topbar__dateNav" aria-label="日期选择">
+            <input
+              type="date"
+              id="datePicker"
+              class="topbar__datePicker"
+              value=""
+              aria-label="选择日期"
+              title="选择日期"
+            />
+          </div>
+          <div class="topbar__chatTitle" id="chatTopTitle" aria-label="会话标题">
+            <div class="topbar__title" id="chatTitle">会话</div>
+          </div>
+        </div>
+        <div class="topbar__right">
+          <button
+            id="nextDay"
+            class="iconbtn topbar__dayBtn"
+            type="button"
+            aria-label="下一天"
+            title="下一天"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9.3 17.3a1 1 0 0 1 0-1.4l3.9-3.9-3.9-3.9a1 1 0 1 1 1.4-1.4l4.6 4.6a1 1 0 0 1 0 1.4l-4.6 4.6a1 1 0 0 1-1.4 0Z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="main" id="pageSessions">
+        <section class="searchCard" id="searchCard">
+          <div class="searchRow">
+            <div class="searchBox">
+              <svg class="searchBox__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M10.5 3a7.5 7.5 0 1 1 4.7 13.3l3.8 3.8a1 1 0 0 1-1.4 1.4l-3.8-3.8A7.5 7.5 0 0 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/>
+              </svg>
+              <input
+                id="q"
+                class="searchBox__input"
+                type="search"
+                placeholder="搜索标题 / URL / 标签"
+                autocomplete="off"
+              />
+              <button
+                id="clearQ"
+                class="searchBox__clear"
+                type="button"
+                aria-label="清除搜索"
+              >
+                ×
+              </button>
+            </div>
+            <button class="pillBtn" type="button" data-action="openFilter">
+              筛选
+            </button>
+          </div>
+
+          <div class="chips" id="chips"></div>
+        </section>
+
+        <section class="listCard">
+          <div class="list" id="list" aria-live="polite"></div>
+          <div class="empty" id="empty" hidden>
+            <div class="empty__icon">🗂️</div>
+            <div class="empty__title">暂无匹配会话</div>
+            <div class="empty__desc">试试清空搜索或调整筛选条件</div>
+          </div>
+        </section>
+      </main>
+
+      <main class="chatPage" id="pageChat" hidden>
+        <div class="chatPage__messages" id="chatMessages" aria-live="polite"></div>
+        <form class="chatComposer" id="chatComposer" autocomplete="off">
+          <button
+            id="faqBtn"
+            class="iconbtn chatComposer__btn chatComposer__btn--faq"
+            type="button"
+            aria-label="常见问题"
+            title="常见问题"
+            data-action="openFaq"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 19a1 1 0 0 1-1-1V6a1 1 0 0 1 2 0v12h16a1 1 0 1 1 0 2H4Z"/>
+              <path d="M7 16a1 1 0 0 1-1-1V11a1 1 0 1 1 2 0v4a1 1 0 0 1-1 1Z"/>
+              <path d="M12 16a1 1 0 0 1-1-1V8a1 1 0 1 1 2 0v7a1 1 0 0 1-1 1Z"/>
+              <path d="M17 16a1 1 0 0 1-1-1v-5a1 1 0 1 1 2 0v5a1 1 0 0 1-1 1Z"/>
+            </svg>
+          </button>
+          <input
+            id="chatInput"
+            class="chatComposer__input"
+            type="text"
+            placeholder="输入消息"
+            inputmode="text"
+            autocomplete="off"
+          />
+          <button class="chatComposer__btn chatComposer__btn--send" id="chatSend" type="submit">
+            发送
+          </button>
+        </form>
+      </main>
+
+      <!-- 筛选弹层 -->
+      <div class="sheetMask" id="sheetMask" hidden></div>
+      <section class="sheet" id="sheet" aria-hidden="true">
+        <div class="sheet__header">
+          <button class="topbar__link" type="button" data-action="closeFilter">取消</button>
+          <div class="sheet__title">筛选</div>
+          <button class="topbar__link is-strong" type="button" data-action="applyFilter">
+            确定
+          </button>
+        </div>
+        <div class="sheet__body">
+          <div class="formGroup">
+            <div class="formHint">提示：可拖拽标签调整顺序（移动端长按拖动）</div>
+            <div class="optionRow" id="tagFilters">
+              <!-- 标签列表将动态生成 -->
+            </div>
+          </div>
+        </div>
+        <div class="sheet__footer">
+          <button class="ghostBtn" type="button" data-action="resetFilter">重置</button>
+        </div>
+      </section>
+
+      <!-- 常见问题弹层（聊天页） -->
+      <div class="sheetMask" id="faqSheetMask" hidden></div>
+      <section class="sheet" id="faqSheet" aria-hidden="true">
+        <div class="sheet__header">
+          <button class="topbar__link" type="button" data-action="closeFaq">取消</button>
+          <div class="sheet__title">常见问题</div>
+          <button class="topbar__link is-strong" type="button" data-action="refreshFaq">
+            刷新
+          </button>
+        </div>
+        <div class="sheet__body">
+          <div class="faqHint">点击一条即可插入到输入框</div>
+          <div class="faqList" id="faqList"></div>
+          <div class="faqEmpty" id="faqEmpty" hidden>暂无常见问题</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Markdown + Mermaid（用于聊天内容渲染） -->
+    <script src="./YiPet/marked.min.js"></script>
+    <script src="./YiPet/mermaid.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
+
+
+
