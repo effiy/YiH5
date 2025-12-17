@@ -189,7 +189,7 @@
 
   const openAuth = () => {
     const curToken = String(state.auth.token || "").trim();
-    const token = window.prompt("请输入 X-Token（用于访问 api.effiy.cn/mongodb）", curToken);
+    const token = window.prompt("请输入 X-Token（用于访问 api.effiy.cn）", curToken);
     if (token == null) return;
     state.auth.token = String(token || "").trim();
     try {
@@ -244,7 +244,7 @@
 
   const fetchSessions = async () => {
     try {
-      const response = await fetch("https://api.effiy.cn/session/");
+      const response = await fetch("https://api.effiy.cn/session/", { headers: { ...getAuthHeaders() } });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -883,7 +883,9 @@
     if (!sessionId) return null;
     
     try {
-      const response = await fetch(`https://api.effiy.cn/session/${encodeURIComponent(sessionId)}`);
+      const response = await fetch(`https://api.effiy.cn/session/${encodeURIComponent(sessionId)}`, {
+        headers: { ...getAuthHeaders() },
+      });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
