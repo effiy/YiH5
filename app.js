@@ -1553,6 +1553,16 @@
     if (action === "openAuth") return openAuth();
     if (action === "closeFaq") return closeFaq();
     if (action === "refreshFaq") return fetchFaqs({ force: true });
+    if (action === "refreshSessions") {
+      // 刷新会话列表接口数据
+      state.lastError = "";
+      renderList();
+      return fetchSessions().then(() => {
+        // 按当前视图刷新 UI
+        if (state.view === "chat") return renderChat();
+        return renderList();
+      });
+    }
     if (action === "insertFaq") {
       const t = el.dataset.faqText;
       return insertFaqText(t);
