@@ -180,7 +180,7 @@
     const user = String(state.auth.user || "").trim();
     const token = String(state.auth.token || "").trim();
     const client = String(state.auth.client || "").trim();
-    if (!user || !token || !client) return {};
+    if (!token) return {};
     return { "X-Token": token, "X-Client": client, "API_X_USER": user };
   };
 
