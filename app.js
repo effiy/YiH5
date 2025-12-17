@@ -164,53 +164,36 @@
       },
     },
     auth: {
-      user: "",
       token: "",
-      client: "",
     },
   };
 
   const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
   const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss";
-  const API_USER_KEY = "YiH5.apiUser.v1";
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
-  const API_CLIENT_KEY = "YiH5.apiClient.v1";
 
   const getAuthHeaders = () => {
-    const user = String(state.auth.user || "").trim();
     const token = String(state.auth.token || "").trim();
-    const client = String(state.auth.client || "").trim();
+    // 只校验 X-Token；其他字段可选（有就带上）
     if (!token) return {};
-    return { "X-Token": token, "X-Client": client, "API_X_USER": user };
+    return { "X-Token": token };
   };
 
   const loadAuthFromStorage = () => {
     try {
-      state.auth.user = String(localStorage.getItem(API_USER_KEY) || "").trim();
       state.auth.token = String(localStorage.getItem(API_TOKEN_KEY) || "").trim();
-      state.auth.client = String(localStorage.getItem(API_CLIENT_KEY) || "").trim();
     } catch {
       // ignore
     }
   };
 
   const openAuth = () => {
-    const curUser = String(state.auth.user || "").trim();
     const curToken = String(state.auth.token || "").trim();
-    const curClient = String(state.auth.client || "").trim();
     const token = window.prompt("请输入 X-Token（用于访问 api.effiy.cn/mongodb）", curToken);
     if (token == null) return;
-    const client = window.prompt("请输入 X-Client（用于访问 api.effiy.cn/mongodb）", curClient);
-    if (client == null) return;
-    const user = window.prompt("请输入 API_X_USER（用于访问 api.effiy.cn/mongodb）", curUser);
-    if (user == null) return;
     state.auth.token = String(token || "").trim();
-    state.auth.client = String(client || "").trim();
-    state.auth.user = String(user || "").trim();
     try {
       localStorage.setItem(API_TOKEN_KEY, state.auth.token);
-      localStorage.setItem(API_CLIENT_KEY, state.auth.client);
-      localStorage.setItem(API_USER_KEY, state.auth.user);
     } catch {
       // ignore
     }
@@ -440,7 +423,7 @@
     } catch (e) {
       console.warn("[YiH5] 获取新闻失败：", e);
       if (String(e?.message || "").includes("HTTP 401")) {
-        state.news.error = "需要配置 API 鉴权（X-Token / X-Client / API_X_USER）。请点右上角🔒设置。";
+        state.news.error = "需要配置 API 鉴权（至少需要 X-Token）。请点右上角🔒设置。";
         state.news.items = [];
         return [];
       }
@@ -668,7 +651,7 @@
     } catch (e) {
       console.warn("[YiH5] 获取常见问题失败：", e);
       if (String(e?.message || "").includes("HTTP 401")) {
-        state.faq.error = "需要配置 API 鉴权（X-Token / X-Client / API_X_USER）。请点右上角🔒设置。";
+        state.faq.error = "需要配置 API 鉴权（至少需要 X-Token）。请点右上角🔒设置。";
         state.faq.items = [];
         return [];
       }
