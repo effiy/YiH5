@@ -160,6 +160,64 @@ input{border:0;outline:none}
 }
 
 /* Markdown/代码块基础样式（服务 Mermaid 代码块展示） */
+.chatBubble--md{
+  /* marked 输出为 HTML（p/ul/pre...），这里不要用 pre-wrap，避免默认段落间距叠加导致“空一大块” */
+  white-space: normal;
+}
+
+/* 统一 Markdown 的块级元素间距：更紧凑、更接近聊天气泡的阅读节奏 */
+.chatBubble--md p,
+.chatBubble--md ul,
+.chatBubble--md ol,
+.chatBubble--md blockquote,
+.chatBubble--md pre,
+.chatBubble--md table,
+.chatBubble--md hr{
+  margin: 0 0 8px;
+}
+.chatBubble--md h1,
+.chatBubble--md h2,
+.chatBubble--md h3,
+.chatBubble--md h4,
+.chatBubble--md h5,
+.chatBubble--md h6{
+  margin: 10px 0 8px;
+  line-height: 1.25;
+  font-weight: 800;
+}
+.chatBubble--md > :first-child{ margin-top: 0; }
+.chatBubble--md > :last-child{ margin-bottom: 0; }
+
+.chatBubble--md ul,
+.chatBubble--md ol{
+  padding-left: 18px;
+}
+.chatBubble--md li{ margin: 2px 0; }
+.chatBubble--md li > p{ margin: 0; }
+
+.chatBubble--md blockquote{
+  padding: 6px 10px;
+  border-left: 3px solid rgba(0,0,0,.18);
+  background: rgba(0,0,0,.04);
+  border-radius: 10px;
+}
+.chatBubble--md hr{
+  border: 0;
+  border-top: 1px solid rgba(0,0,0,.12);
+}
+.chatBubble--md a{
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.chatBubble--md img{
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  margin: 6px 0;
+}
+
 .chatBubble--md pre{
   margin: 8px 0;
   padding: 10px 12px;
@@ -170,6 +228,11 @@ input{border:0;outline:none}
 .chatBubble--md code{
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 13px;
+}
+.chatBubble--md :not(pre) > code{
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0,0,0,.06);
 }
 
 /* Mermaid 渲染结果 */
