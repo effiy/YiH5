@@ -147,7 +147,76 @@
     filter: {
       selectedTags: [], // 选中的标签数组
     },
+    newsFilterDraft: {
+      selectedTags: [], // 新闻筛选草稿：选中的标签数组
+    },
     sessions: [],
+    bottomTab: "sessions", // sessions | news
+    news: {
+      items: [],
+      loading: false,
+      error: "",
+      isoDate: "", // 当前加载的 isoDate 范围：YYYY-MM-DD,YYYY-MM-DD
+      loadedAt: 0,
+      q: "", // 搜索关键词
+      filter: {
+        selectedTags: [], // 选中的标签数组
+      },
+    },
+    auth: {
+      user: "",
+      token: "",
+      client: "",
+    },
+  };
+
+  const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
+  const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss";
+  const API_USER_KEY = "YiH5.apiUser.v1";
+  const API_TOKEN_KEY = "YiH5.apiToken.v1";
+  const API_CLIENT_KEY = "YiH5.apiClient.v1";
+
+  const getAuthHeaders = () => {
+    const user = String(state.auth.user || "").trim();
+    const token = String(state.auth.token || "").trim();
+    const client = String(state.auth.client || "").trim();
+    if (!user || !token || !client) return {};
+    return { "X-Token": token, "X-Client": client, "API_X_USER": user };
+  };
+
+  const loadAuthFromStorage = () => {
+    try {
+      state.auth.user = String(localStorage.getItem(API_USER_KEY) || "").trim();
+      state.auth.token = String(localStorage.getItem(API_TOKEN_KEY) || "").trim();
+      state.auth.client = String(localStorage.getItem(API_CLIENT_KEY) || "").trim();
+    } catch {
+      // ignore
+    }
+  };
+
+  const openAuth = () => {
+    const curUser = String(state.auth.user || "").trim();
+    const curToken = String(state.auth.token || "").trim();
+    const curClient = String(state.auth.client || "").trim();
+    const token = window.prompt("请输入 X-Token（用于访问 api.effiy.cn/mongodb）", curToken);
+    if (token == null) return;
+    const client = window.prompt("请输入 X-Client（用于访问 api.effiy.cn/mongodb）", curClient);
+    if (client == null) return;
+    const user = window.prompt("请输入 API_X_USER（用于访问 api.effiy.cn/mongodb）", curUser);
+    if (user == null) return;
+    state.auth.token = String(token || "").trim();
+    state.auth.client = String(client || "").trim();
+    state.auth.user = String(user || "").trim();
+    try {
+      localStorage.setItem(API_TOKEN_KEY, state.auth.token);
+      localStorage.setItem(API_CLIENT_KEY, state.auth.client);
+      localStorage.setItem(API_USER_KEY, state.auth.user);
+    } catch {
+      // ignore
+    }
+    // 配置完立即尝试刷新
+    if (state.bottomTab === "news") fetchNews({ force: true });
+    if (state.view === "chat") fetchFaqs({ force: true });
   };
 
   // 标签排序（本地持久化）
@@ -272,6 +341,277 @@
     faqSheet: $("#faqSheet"),
     faqList: $("#faqList"),
     faqEmpty: $("#faqEmpty"),
+    pageNews: $("#pageNews"),
+    newsSearchCard: $("#newsSearchCard"),
+    newsQ: $("#newsQ"),
+    clearNewsQ: $("#clearNewsQ"),
+    newsChips: $("#newsChips"),
+    newsList: $("#newsList"),
+    newsEmpty: $("#newsEmpty"),
+    bottomNav: $("#bottomNav"),
+  };
+
+  // 统一的可见性同步：确保「会话视图只显示会话」「新闻视图只显示新闻」
+  const syncBottomNavActive = () => {
+    if (!dom.bottomNav) return;
+    $$(".bottomNav__item", dom.bottomNav).forEach((b) => {
+      const tab = b.dataset.tab || "sessions";
+      const isActive = tab === state.bottomTab;
+      b.classList.toggle("is-active", isActive);
+      if (isActive) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+  };
+
+  const syncVisibility = () => {
+    const isSessions = state.bottomTab === "sessions";
+    const isChat = isSessions && state.view === "chat";
+
+    // 页面显示：三者互斥
+    if (dom.pageNews) dom.pageNews.hidden = isSessions;
+    if (dom.pageSessions) dom.pageSessions.hidden = !isSessions || isChat;
+    if (dom.pageChat) dom.pageChat.hidden = !isSessions || !isChat;
+
+    // 样式与返回按钮：只在“会话-聊天页”生效
+    if (isChat) dom.app.classList.add("is-chat");
+    else dom.app.classList.remove("is-chat");
+    if (isChat) mountChatBackBtn();
+    else unmountChatBackBtn();
+  };
+
+  // ---------- News ----------
+  const extractNewsList = (result) => {
+    // YiPet: 数据在 result.data.list
+    if (result && result.data && Array.isArray(result.data.list)) return result.data.list;
+    // 兼容：直接数组
+    if (Array.isArray(result)) return result;
+    // 兼容：result.data 是数组
+    if (result && Array.isArray(result.data)) return result.data;
+    // 兼容：其它字段里有 list/items
+    if (result && Array.isArray(result.list)) return result.list;
+    if (result && Array.isArray(result.items)) return result.items;
+    return [];
+  };
+
+  const normalizeNewsItem = (n) => {
+    const title = String(n?.title ?? "").trim() || "未命名新闻";
+    const link = String(n?.link ?? "").trim();
+    const description = String(n?.description ?? "").trim();
+    const sourceName = String(n?.source_name ?? n?.sourceName ?? "").trim();
+    const createdTime = String(n?.createdTime ?? "").trim();
+    const published = String(n?.published ?? "").trim();
+    const tags = Array.isArray(n?.tags) ? n.tags.map((t) => String(t || "").trim()).filter(Boolean) : [];
+    const key = String(n?.key ?? n?._id ?? n?.id ?? link ?? title);
+    return { key, title, link, description, sourceName, createdTime, published, tags };
+  };
+
+  const getNewsIsoDateBySelectedDate = () => {
+    const ymd = state.selectedDate || dateUtil.todayYMD();
+    return `${ymd},${ymd}`;
+  };
+
+  const fetchNews = async ({ force = false } = {}) => {
+    const now = Date.now();
+    const isoDate = getNewsIsoDateBySelectedDate();
+
+    const isSameDate = state.news.isoDate === isoDate;
+    const isFresh = state.news.loadedAt && now - state.news.loadedAt < 60 * 1000; // 1 分钟内不重复刷
+    if (!force && isSameDate && isFresh && Array.isArray(state.news.items) && state.news.items.length > 0) {
+      return state.news.items;
+    }
+
+    if (state.news.loading) return state.news.items;
+    state.news.loading = true;
+    state.news.error = "";
+    renderNews();
+
+    try {
+      const url = `${NEWS_API_BASE}&isoDate=${encodeURIComponent(isoDate)}`;
+      const resp = await fetch(url, { headers: { ...getAuthHeaders() } });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const result = await resp.json();
+      const list = extractNewsList(result);
+      const items = Array.isArray(list) ? list.map(normalizeNewsItem) : [];
+      state.news.items = items;
+      state.news.isoDate = isoDate;
+      state.news.loadedAt = Date.now();
+      state.news.error = "";
+      return items;
+    } catch (e) {
+      console.warn("[YiH5] 获取新闻失败：", e);
+      if (String(e?.message || "").includes("HTTP 401")) {
+        state.news.error = "需要配置 API 鉴权（X-Token / X-Client / API_X_USER）。请点右上角🔒设置。";
+        state.news.items = [];
+        return [];
+      }
+      const isFile = location.protocol === "file:";
+      state.news.error = isFile
+        ? "获取新闻失败：当前以 file:// 打开页面，跨域请求可能被浏览器拦截。建议用本地静态服务器打开再试。"
+        : "获取新闻失败：请稍后重试。";
+      state.news.items = [];
+      return [];
+    } finally {
+      state.news.loading = false;
+      renderNews();
+    }
+  };
+
+  // 获取新闻的所有标签（用于筛选）
+  const getNewsTags = () => {
+    const allTags = new Set();
+    state.news.items.forEach((n) => {
+      if (Array.isArray(n.tags)) {
+        n.tags.forEach((t) => {
+          const tag = String(t || "").trim();
+          if (tag) allTags.add(tag);
+        });
+      }
+    });
+    return Array.from(allTags).sort();
+  };
+
+  // 计算新闻标签数量
+  const getNewsTagCount = (tag) => {
+    return state.news.items.filter((n) => {
+      const newsTags = Array.isArray(n.tags) ? n.tags.map((t) => String(t).trim()) : [];
+      return newsTags.includes(tag);
+    }).length;
+  };
+
+  // 计算新闻筛选标签（chips）
+  const computeNewsChips = () => {
+    const c = [];
+    const f = state.news.filter;
+    if (state.news.q.trim()) c.push({ key: "q", label: `搜索：${state.news.q.trim()}` });
+    // 显示选中的标签
+    f.selectedTags.forEach((tag) => {
+      c.push({ key: `tag_${tag}`, label: tag, tagValue: tag });
+    });
+    return c;
+  };
+
+  // 新闻搜索和筛选
+  const filterAndSortNews = () => {
+    const q = state.news.q.trim().toLowerCase();
+    const f = state.news.filter;
+    let arr = state.news.items.slice();
+
+    if (q) {
+      arr = arr.filter((n) => {
+        const hay = `${n.title} ${n.description || ""} ${n.link || ""} ${(n.tags || []).join(" ")}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    // 标签筛选：如果选中了标签，新闻必须包含至少一个选中的标签
+    if (f.selectedTags.length > 0) {
+      arr = arr.filter((n) => {
+        const newsTags = Array.isArray(n.tags) ? n.tags.map((t) => String(t).trim()) : [];
+        return f.selectedTags.some((selectedTag) => newsTags.includes(selectedTag));
+      });
+    }
+
+    // 按创建时间倒序排序
+    arr.sort((a, b) => {
+      const timeA = new Date(a.createdTime || a.published || 0).getTime();
+      const timeB = new Date(b.createdTime || b.published || 0).getTime();
+      return timeB - timeA;
+    });
+    return arr;
+  };
+
+  // 渲染新闻筛选标签（chips）
+  const renderNewsChips = () => {
+    if (!dom.newsChips) return;
+    const chips = computeNewsChips();
+    dom.newsChips.innerHTML = chips
+      .map(
+        (c) => `
+          <span class="chip" data-chip="${c.key}">
+            <span>${escapeHtml(c.label)}</span>
+            <button class="chip__x" type="button" aria-label="移除" data-action="removeNewsChip" data-key="${c.key}" ${c.tagValue ? `data-tag-value="${escapeHtml(c.tagValue)}"` : ''}>×</button>
+          </span>
+        `,
+      )
+      .join("");
+  };
+
+  const renderNews = () => {
+    if (!dom.newsList || !dom.newsEmpty) return;
+
+    if (state.news.loading) {
+      dom.newsEmpty.hidden = false;
+      dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("加载中…"));
+      dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode("正在获取新闻列表"));
+      dom.newsList.innerHTML = "";
+      renderNewsChips();
+      return;
+    }
+
+    if (state.news.error) {
+      dom.newsEmpty.hidden = false;
+      dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("加载失败"));
+      dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode(state.news.error));
+      dom.newsList.innerHTML = "";
+      renderNewsChips();
+      return;
+    }
+
+    const filteredItems = filterAndSortNews();
+    renderNewsChips();
+
+    dom.newsEmpty.hidden = filteredItems.length !== 0;
+    dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("暂无匹配新闻"));
+    dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode("试试清空搜索或调整筛选条件"));
+
+    dom.newsList.innerHTML = filteredItems
+      .map((n) => {
+        const tagBadges = (n.tags || []).slice(0, 3).map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`).join("");
+        const meta = n.createdTime || n.published || "";
+        const linkPart = n.link
+          ? `<a class="newsTitleLink" href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.title)}</a>`
+          : `<span class="newsTitleLink">${escapeHtml(n.title)}</span>`;
+        return `
+          <article class="newsItem">
+            <div class="newsItem__title">${linkPart}</div>
+            ${n.description ? `<div class="newsItem__desc">${escapeHtml(n.description)}</div>` : ""}
+            <div class="newsItem__meta">
+              <span class="newsItem__metaText">${escapeHtml(meta || "")}</span>
+              <span class="newsItem__tags">${tagBadges}</span>
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  };
+
+  const setBottomTab = async (tab, { persist = true } = {}) => {
+    const next = tab === "news" ? "news" : "sessions";
+    state.bottomTab = next;
+    // 切到新闻时不应残留会话聊天态
+    if (next === "news") {
+      state.view = "list";
+      state.activeSessionId = "";
+    }
+
+    syncBottomNavActive();
+    syncVisibility();
+
+    if (persist) {
+      try {
+        localStorage.setItem(BOTTOM_TAB_KEY, next);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (next === "news") {
+      renderNews();
+      await fetchNews({ force: false });
+    } else {
+      // 回到会话页，按当前路由渲染
+      applyRoute();
+    }
   };
 
   // ---------- FAQ ----------
@@ -317,7 +657,7 @@
     state.faq.error = "";
     renderFaqSheet();
     try {
-      const resp = await fetch(FAQ_API_URL);
+      const resp = await fetch(FAQ_API_URL, { headers: { ...getAuthHeaders() } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const result = await resp.json();
       const list = extractFaqList(result);
@@ -327,6 +667,11 @@
       return state.faq.items;
     } catch (e) {
       console.warn("[YiH5] 获取常见问题失败：", e);
+      if (String(e?.message || "").includes("HTTP 401")) {
+        state.faq.error = "需要配置 API 鉴权（X-Token / X-Client / API_X_USER）。请点右上角🔒设置。";
+        state.faq.items = [];
+        return [];
+      }
       const isFile = location.protocol === "file:";
       state.faq.error = isFile
         ? "获取常见问题失败：当前以 file:// 打开页面，跨域请求可能被浏览器拦截。建议用本地静态服务器打开再试。"
@@ -527,16 +872,7 @@
 
   const setView = (view) => {
     state.view = view;
-    if (view === "chat") dom.app.classList.add("is-chat");
-    else dom.app.classList.remove("is-chat");
-
-    const isChat = view === "chat";
-    dom.pageSessions.hidden = isChat;
-    dom.pageChat.hidden = !isChat;
-
-    // 首页（list）不需要返回按钮及功能：仅聊天页挂载
-    if (isChat) mountChatBackBtn();
-    else unmountChatBackBtn();
+    syncVisibility();
   };
 
   const navigateToList = () => {
@@ -618,6 +954,11 @@
   };
 
   const applyRoute = async () => {
+    // 只有在会话视图时才处理路由
+    if (state.bottomTab !== "sessions") {
+      return;
+    }
+    
     const r = parseRoute();
     if (r.name === "chat" && r.id) {
       state.activeSessionId = r.id;
@@ -782,7 +1123,6 @@
   };
 
   const renderItem = (s) => {
-    const letter = (s.title || "A").trim().slice(0, 1);
     const badges = [
       s.muted ? `<span class="badge">免打扰</span>` : "",
       s.messageCount > 0 ? `<span class="badge">消息 ${escapeHtml(String(s.messageCount))}</span>` : `<span class="badge">暂无消息</span>`,
@@ -796,7 +1136,6 @@
     
     return `
       <article class="item${mutedCls}" data-id="${s.id}">
-        <div class="item__left" aria-hidden="true">${escapeHtml(letter)}</div>
         <div class="item__mid">
           <div class="item__row1">
             <div class="item__title">${escapeHtml(displayTitle)}</div>
@@ -833,6 +1172,20 @@
     dom.sheet.setAttribute("aria-hidden", "false");
   };
 
+  const openNewsFilter = () => {
+    // 同步草稿
+    state.newsFilterDraft = {
+      selectedTags: [...state.news.filter.selectedTags],
+    };
+    
+    // 先渲染标签列表（会根据newsFilterDraft自动设置选中状态）
+    renderNewsTagFilters();
+
+    dom.sheetMask.hidden = false;
+    dom.sheet.classList.add("is-open");
+    dom.sheet.setAttribute("aria-hidden", "false");
+  };
+
   // 渲染标签筛选列表
   const renderTagFilters = () => {
     const tagContainer = $("#tagFilters");
@@ -853,6 +1206,41 @@
             type="button"
             class="option is-draggable ${isSelected ? 'is-selected' : ''}"
             data-action="toggleTag"
+            data-tag="${escapeHtml(tag)}"
+            draggable="true"
+            title="拖拽调整顺序（点击可筛选）"
+          >
+            <span>${escapeHtml(tag)}</span>
+            <span class="option__count">${count}</span>
+          </button>
+        `;
+      })
+      .join("");
+
+    // 绑定拖拽排序（每次渲染重新绑定到新节点）
+    bindTagDragSort(tagContainer);
+  };
+
+  // 渲染新闻标签筛选列表
+  const renderNewsTagFilters = () => {
+    const tagContainer = $("#tagFilters");
+    if (!tagContainer) return;
+    
+    const allTags = getNewsTags();
+    if (allTags.length === 0) {
+      tagContainer.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:10px 0;">暂无标签</div>';
+      return;
+    }
+    
+    tagContainer.innerHTML = allTags
+      .map((tag) => {
+        const isSelected = state.newsFilterDraft.selectedTags.includes(tag);
+        const count = getNewsTagCount(tag);
+        return `
+          <button
+            type="button"
+            class="option is-draggable ${isSelected ? 'is-selected' : ''}"
+            data-action="toggleNewsTag"
             data-tag="${escapeHtml(tag)}"
             draggable="true"
             title="拖拽调整顺序（点击可筛选）"
@@ -1051,12 +1439,30 @@
     renderList();
   };
 
-  const resetFilter = () => {
-    state.filterDraft = {
-      selectedTags: [],
+  const applyNewsFilter = () => {
+    // 收集选中的标签（从newsFilterDraft中获取，因为点击时已经更新了）
+    const next = {
+      selectedTags: [...state.newsFilterDraft.selectedTags],
     };
-    // 重新渲染标签列表以更新选中状态
-    renderTagFilters();
+    state.news.filter = next;
+    closeFilter();
+    renderNews();
+  };
+
+  const resetFilter = () => {
+    if (state.bottomTab === "news") {
+      state.newsFilterDraft = {
+        selectedTags: [],
+      };
+      // 重新渲染标签列表以更新选中状态
+      renderNewsTagFilters();
+    } else {
+      state.filterDraft = {
+        selectedTags: [],
+      };
+      // 重新渲染标签列表以更新选中状态
+      renderTagFilters();
+    }
   };
 
   const deleteOne = (id) => {
@@ -1068,8 +1474,8 @@
   const removeChip = (key, tagValue) => {
     if (key === "q") state.q = "";
     if (key === "date") {
-      state.selectedDate = "";
-      dom.datePicker.value = "";
+      // 统一走 setSelectedDate，确保会话/新闻联动一致
+      setSelectedDate("", { syncPicker: true, render: false });
     }
     if (key.startsWith("tag_")) {
       // 从selectedTags中移除对应的标签
@@ -1082,13 +1488,40 @@
       }
     }
     dom.q.value = state.q;
-    renderList();
+    if (state.bottomTab === "news") renderNews();
+    else renderList();
+  };
+
+  const removeNewsChip = (key, tagValue) => {
+    if (key === "q") state.news.q = "";
+    if (key.startsWith("tag_")) {
+      // 从selectedTags中移除对应的标签
+      if (tagValue) {
+        state.news.filter.selectedTags = state.news.filter.selectedTags.filter((t) => t !== tagValue);
+      } else {
+        // 如果没有传入tagValue，尝试从key中提取
+        const extractedTag = key.replace("tag_", "");
+        state.news.filter.selectedTags = state.news.filter.selectedTags.filter((t) => t !== extractedTag);
+      }
+    }
+    if (dom.newsQ) dom.newsQ.value = state.news.q;
+    renderNews();
   };
 
   const setSelectedDate = (ymd, { syncPicker = true, render = true } = {}) => {
     state.selectedDate = ymd || "";
     if (syncPicker) dom.datePicker.value = state.selectedDate;
-    if (render) renderList();
+    if (!render) return;
+
+    // 按当前底部 tab 做一致的联动：
+    // - 会话：本地按日期过滤并重绘
+    // - 新闻：按日期请求接口并重绘（日期变化应立即生效）
+    if (state.bottomTab === "news") {
+      renderNews();
+      fetchNews({ force: true });
+    } else {
+      renderList();
+    }
   };
 
   const toggleTag = (tag) => {
@@ -1104,19 +1537,47 @@
     renderTagFilters();
   };
 
+  const toggleNewsTag = (tag) => {
+    const index = state.newsFilterDraft.selectedTags.indexOf(tag);
+    if (index > -1) {
+      // 如果已选中，则取消选中
+      state.newsFilterDraft.selectedTags.splice(index, 1);
+    } else {
+      // 如果未选中，则选中
+      state.newsFilterDraft.selectedTags.push(tag);
+    }
+    // 重新渲染标签列表以更新选中状态
+    renderNewsTagFilters();
+  };
+
   const onAction = (el, action, ev) => {
     if (!action) return;
     if (action === "noop") return;
     if (action === "openFilter") return openFilter();
+    if (action === "openNewsFilter") return openNewsFilter();
     if (action === "closeFilter") return closeFilter();
-    if (action === "applyFilter") return applyFilter();
+    if (action === "applyFilter") {
+      if (state.bottomTab === "news") {
+        return applyNewsFilter();
+      } else {
+        return applyFilter();
+      }
+    }
     if (action === "resetFilter") return resetFilter();
     if (action === "openFaq") return openFaq();
+    if (action === "openAuth") return openAuth();
     if (action === "closeFaq") return closeFaq();
     if (action === "refreshFaq") return fetchFaqs({ force: true });
     if (action === "insertFaq") {
       const t = el.dataset.faqText;
       return insertFaqText(t);
+    }
+    if (action === "switchBottomTab") {
+      const tab = el.dataset.tab || "sessions";
+      return setBottomTab(tab);
+    }
+    if (action === "refreshNews") {
+      return fetchNews({ force: true });
     }
     if (action === "toggleTag") {
       // 拖拽排序时会触发 click（尤其是移动端），这里直接吞掉
@@ -1128,11 +1589,26 @@
       const tag = el.dataset.tag;
       if (tag) return toggleTag(tag);
     }
+    if (action === "toggleNewsTag") {
+      // 拖拽排序时会触发 click（尤其是移动端），这里直接吞掉
+      if (state.isDraggingTag) {
+        ev?.preventDefault?.();
+        ev?.stopPropagation?.();
+        return;
+      }
+      const tag = el.dataset.tag;
+      if (tag) return toggleNewsTag(tag);
+    }
 
     if (action === "removeChip") {
       const chipKey = el.dataset.key;
       const tagValue = el.dataset.tagValue;
       return removeChip(chipKey, tagValue);
+    }
+    if (action === "removeNewsChip") {
+      const chipKey = el.dataset.key;
+      const tagValue = el.dataset.tagValue;
+      return removeNewsChip(chipKey, tagValue);
     }
 
   };
@@ -1166,6 +1642,7 @@
     const handleDateChange = () => {
       const value = dom.datePicker.value;
       // 允许清空日期（value 为空字符串时也更新状态）
+      // 具体刷新逻辑交给 setSelectedDate 统一处理，避免入口分散导致交互不一致
       setSelectedDate(value || "");
     };
     dom.datePicker.addEventListener("change", handleDateChange);
@@ -1192,6 +1669,18 @@
       dom.q.value = "";
       dom.q.focus();
       renderList();
+    });
+
+    // news search
+    dom.newsQ?.addEventListener("input", () => {
+      state.news.q = dom.newsQ.value;
+      renderNews();
+    });
+    dom.clearNewsQ?.addEventListener("click", () => {
+      state.news.q = "";
+      dom.newsQ.value = "";
+      dom.newsQ.focus();
+      renderNews();
     });
 
     // tabs
@@ -1262,15 +1751,18 @@
   };
 
   const init = async () => {
+    loadAuthFromStorage();
     // 默认显示今天（并按今天过滤）；用户仍可手动清空日期来取消过滤
     setSelectedDate(dateUtil.todayYMD(), { syncPicker: true, render: false });
+    // 默认显示会话视图（不读取 localStorage，始终默认会话）
+    state.bottomTab = "sessions";
     // 确保初始状态是列表页（不显示回退按钮）
     setView("list");
     wire();
     // 从API获取数据
     await fetchSessions();
     // 初次渲染由路由决定
-    applyRoute();
+    await setBottomTab("sessions", { persist: false });
   };
 
   window.addEventListener("hashchange", applyRoute);

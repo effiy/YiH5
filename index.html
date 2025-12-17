@@ -45,6 +45,18 @@
         </div>
         <div class="topbar__right">
           <button
+            id="authBtn"
+            class="iconbtn"
+            type="button"
+            aria-label="API 鉴权"
+            title="API 鉴权（X-Token / X-Client / API_X_USER）"
+            data-action="openAuth"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 10V8a5 5 0 0 1 10 0v2h1a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h1Zm2 0h6V8a3 3 0 0 0-6 0v2Zm3 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0v-2a1 1 0 0 0-1-1Z"/>
+            </svg>
+          </button>
+          <button
             id="nextDay"
             class="iconbtn topbar__dayBtn"
             type="button"
@@ -94,6 +106,47 @@
           <div class="empty" id="empty" hidden>
             <div class="empty__icon">🗂️</div>
             <div class="empty__title">暂无匹配会话</div>
+            <div class="empty__desc">试试清空搜索或调整筛选条件</div>
+          </div>
+        </section>
+      </main>
+
+      <main class="main" id="pageNews" hidden>
+        <section class="searchCard" id="newsSearchCard">
+          <div class="searchRow">
+            <div class="searchBox">
+              <svg class="searchBox__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M10.5 3a7.5 7.5 0 1 1 4.7 13.3l3.8 3.8a1 1 0 0 1-1.4 1.4l-3.8-3.8A7.5 7.5 0 0 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"/>
+              </svg>
+              <input
+                id="newsQ"
+                class="searchBox__input"
+                type="search"
+                placeholder="搜索标题 / URL / 标签"
+                autocomplete="off"
+              />
+              <button
+                id="clearNewsQ"
+                class="searchBox__clear"
+                type="button"
+                aria-label="清除搜索"
+              >
+                ×
+              </button>
+            </div>
+            <button class="pillBtn" type="button" data-action="openNewsFilter">
+              筛选
+            </button>
+          </div>
+
+          <div class="chips" id="newsChips"></div>
+        </section>
+
+        <section class="listCard">
+          <div class="list" id="newsList" aria-live="polite"></div>
+          <div class="empty" id="newsEmpty" hidden>
+            <div class="empty__icon">📰</div>
+            <div class="empty__title">暂无匹配新闻</div>
             <div class="empty__desc">试试清空搜索或调整筛选条件</div>
           </div>
         </section>
@@ -170,6 +223,31 @@
           <div class="faqEmpty" id="faqEmpty" hidden>暂无常见问题</div>
         </div>
       </section>
+
+      <!-- 底部导航：会话 / 新闻 -->
+      <nav class="bottomNav" id="bottomNav" aria-label="底部导航">
+        <button
+          type="button"
+          class="bottomNav__item is-active"
+          data-action="switchBottomTab"
+          data-tab="sessions"
+          aria-current="page"
+          aria-label="会话"
+        >
+          <span class="bottomNav__icon" aria-hidden="true">💬</span>
+          <span class="bottomNav__label">会话</span>
+        </button>
+        <button
+          type="button"
+          class="bottomNav__item"
+          data-action="switchBottomTab"
+          data-tab="news"
+          aria-label="新闻"
+        >
+          <span class="bottomNav__icon" aria-hidden="true">📰</span>
+          <span class="bottomNav__label">新闻</span>
+        </button>
+      </nav>
     </div>
 
     <!-- Markdown + Mermaid（用于聊天内容渲染） -->
