@@ -105,7 +105,9 @@
     parseYMD(ymd) {
       if (!ymd) return null;
       const parts = String(ymd).split("-");
-      if (parts.length !== 3) return null;
+      if (!Array.isArray(parts) || parts.length !== 3) return null;
+      // 确保所有部分都存在且非空
+      if (!parts[0] || !parts[1] || !parts[2]) return null;
       const y = Number(parts[0]);
       const m = Number(parts[1]);
       const d = Number(parts[2]);
@@ -468,7 +470,7 @@
     const title = (s.pageTitle && s.pageTitle.trim()) || s.title || "会话";
     dom.chatTitle.textContent = title;
 
-    const msgs = Array.isArray(s.messages) ? s.messages : [];
+    const msgs = Array.isArray(s.messages) ? s.messages.filter(m => m != null) : [];
     if (msgs.length === 0) {
       dom.chatMessages.innerHTML = `<div class="empty" style="background:transparent;box-shadow:none">
         <div class="empty__icon">🗨️</div>
@@ -478,6 +480,8 @@
     } else {
       dom.chatMessages.innerHTML = msgs
         .map((m) => {
+          // 确保消息对象有效
+          if (!m || typeof m !== 'object') return '';
           const role = normalizeRole(m);
           const text = normalizeText(m);
           const isMe = role === "user";
@@ -567,7 +571,11 @@
       const data = await response.json();
       
       // 处理返回的数据（支持多种可能的返回格式）
-      const sessionData = data.data || data;
+      const sessionData = data?.data || data;
+      if (!sessionData || typeof sessionData !== 'object') {
+        console.warn("[YiH5] 会话详情数据格式异常:", data);
+        return null;
+      }
       
       // 如果返回了 messages 字段，更新到会话中
       if (Array.isArray(sessionData.messages) && sessionData.messages.length > 0) {
