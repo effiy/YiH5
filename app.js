@@ -1568,97 +1568,29 @@
     return fetchFaqs({ force: true });
   };
 
-  // ---------- Pull to refresh ----------
-  const bindPullToRefresh = ({ triggerEl, indicatorEl, isAtTop, onRefresh }) => {
-    if (!triggerEl || !indicatorEl || typeof onRefresh !== "function") return;
-
-    const THRESHOLD = 56;
-    const MAX_PULL = 88;
-    let startY = 0;
-    let pulling = false;
-    let pullY = 0;
-    let refreshing = false;
-
-    const setIndicator = ({ height = 0, text = "", mode = "" } = {}) => {
-      indicatorEl.style.height = `${Math.max(0, Math.round(height))}px`;
-      indicatorEl.classList.toggle("is-refreshing", mode === "refreshing");
-      indicatorEl.classList.toggle("is-ready", mode === "ready");
-      indicatorEl.textContent = text;
-    };
-
-    const reset = () => setIndicator({ height: 0, text: "" });
-
-    const shouldIgnoreTarget = (t) => {
-      if (!t) return false;
-      const el = t.nodeType === 1 ? t : t.parentElement;
-      if (!el) return false;
-      if (el.closest("input, textarea, select, [contenteditable='true']")) return true;
-      return false;
-    };
-
-    const onTouchStart = (e) => {
-      if (refreshing) return;
-      if (e.touches?.length !== 1) return;
-      if (shouldIgnoreTarget(e.target)) return;
-      if (!isAtTop()) return;
-      pulling = true;
-      pullY = 0;
-      startY = e.touches[0].clientY;
-      setIndicator({ height: 0, text: "下拉刷新" });
-    };
-
-    const onTouchMove = (e) => {
-      if (!pulling) return;
-      if (refreshing) return;
-      if (!isAtTop()) {
-        pulling = false;
-        reset();
+  // ---------- Manual refresh（替代下拉刷新） ----------
+  let manualRefreshing = false;
+  const manualRefresh = async () => {
+    if (manualRefreshing) return;
+    manualRefreshing = true;
+    const btn = document.getElementById("refreshBtn");
+    btn?.classList.add("is-spinning");
+    try {
+      // 优先：FAQ 弹层打开时刷新 FAQ
+      if (dom.faqSheet?.classList.contains("is-open")) {
+        await refreshFaq();
         return;
       }
-      const y = e.touches?.[0]?.clientY ?? startY;
-      const dy = y - startY;
-      if (dy <= 0) {
-        pullY = 0;
-        setIndicator({ height: 0, text: "下拉刷新" });
+      // 其次：当前底部 tab
+      if (state.bottomTab === "news") {
+        await refreshNews();
         return;
       }
-      // 只在“下拉”时阻止默认滚动，避免影响正常上滑
-      e.preventDefault();
-      pullY = Math.min(MAX_PULL, dy * 0.85);
-      const mode = pullY >= THRESHOLD ? "ready" : "";
-      setIndicator({ height: pullY, text: pullY >= THRESHOLD ? "松开刷新" : "下拉刷新", mode });
-    };
-
-    const onTouchEnd = async () => {
-      if (!pulling) return;
-      pulling = false;
-      if (refreshing) return;
-      if (pullY < THRESHOLD) {
-        reset();
-        return;
-      }
-      refreshing = true;
-      setIndicator({ height: THRESHOLD, text: "正在刷新…", mode: "refreshing" });
-      try {
-        await onRefresh();
-        setIndicator({ height: THRESHOLD, text: "刷新完成", mode: "" });
-        window.setTimeout(() => reset(), 350);
-      } catch (e) {
-        console.warn("[YiH5] 下拉刷新失败：", e);
-        setIndicator({ height: THRESHOLD, text: "刷新失败", mode: "" });
-        window.setTimeout(() => reset(), 600);
-      } finally {
-        refreshing = false;
-      }
-    };
-
-    triggerEl.addEventListener("touchstart", onTouchStart, { passive: true });
-    triggerEl.addEventListener("touchmove", onTouchMove, { passive: false });
-    triggerEl.addEventListener("touchend", onTouchEnd, { passive: true });
-    triggerEl.addEventListener("touchcancel", () => {
-      pulling = false;
-      if (!refreshing) reset();
-    }, { passive: true });
+      await refreshSessions();
+    } finally {
+      manualRefreshing = false;
+      btn?.classList.remove("is-spinning");
+    }
   };
 
   const onAction = (el, action, ev) => {
@@ -1678,6 +1610,7 @@
     if (action === "openFaq") return openFaq();
     if (action === "openAuth") return openAuth();
     if (action === "closeFaq") return closeFaq();
+    if (action === "manualRefresh") return manualRefresh();
     if (action === "refreshFaq") return refreshFaq();
     if (action === "refreshSessions") return refreshSessions();
     if (action === "insertFaq") {
@@ -1828,58 +1761,6 @@
       if (!id) return;
       navigateToChat(id);
     });
-
-    // 下拉刷新：会话/新闻（页面滚动在 window 上，触顶判断用 scrollY）
-    const mkPtrIndicator = () => {
-      const el = document.createElement("div");
-      el.className = "ptrIndicator";
-      el.setAttribute("aria-hidden", "true");
-      el.style.height = "0px";
-      el.textContent = "";
-      return el;
-    };
-
-    // sessions
-    if (dom.list) {
-      const card = dom.list.parentElement;
-      const indicator = mkPtrIndicator();
-      card?.insertBefore(indicator, dom.list);
-      bindPullToRefresh({
-        triggerEl: dom.pageSessions || document,
-        indicatorEl: indicator,
-        isAtTop: () => window.scrollY <= 0.5 && state.bottomTab === "sessions" && state.view !== "chat",
-        onRefresh: refreshSessions,
-      });
-    }
-
-    // news
-    if (dom.newsList) {
-      const card = dom.newsList.parentElement;
-      const indicator = mkPtrIndicator();
-      card?.insertBefore(indicator, dom.newsList);
-      bindPullToRefresh({
-        triggerEl: dom.pageNews || document,
-        indicatorEl: indicator,
-        isAtTop: () => window.scrollY <= 0.5 && state.bottomTab === "news",
-        onRefresh: refreshNews,
-      });
-    }
-
-    // faq（弹层内滚动容器是 sheet__body）
-    if (dom.faqList) {
-      const body = dom.faqList.closest(".sheet__body");
-      if (body) {
-        const indicator = mkPtrIndicator();
-        indicator.classList.add("is-inSheet");
-        body.insertBefore(indicator, body.firstChild);
-        bindPullToRefresh({
-          triggerEl: body,
-          indicatorEl: indicator,
-          isAtTop: () => body.scrollTop <= 0.5 && dom.faqSheet?.classList.contains("is-open"),
-          onRefresh: refreshFaq,
-        });
-      }
-    }
 
     // 发送消息
     dom.chatComposer?.addEventListener("submit", (ev) => {
