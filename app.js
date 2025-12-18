@@ -167,6 +167,62 @@
     auth: {
       token: "",
     },
+    // 聊天 UI 状态（不持久化到接口，仅用于前端交互）
+    chatUi: {
+      // key -> true 表示已展开；未记录或 false 表示折叠（仅对“过长消息”生效）
+      foldExpanded: {},
+    },
+  };
+
+  // ---------- Chat fold state persistence ----------
+  const CHAT_FOLD_STORAGE_KEY = "YiH5.chatFoldExpanded.v1";
+  const CHAT_FOLD_STORAGE_MAX = 300; // 防止无限增长
+
+  const loadChatFoldState = () => {
+    try {
+      const raw = localStorage.getItem(CHAT_FOLD_STORAGE_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      const map = obj && typeof obj === "object" ? obj.foldExpanded : null;
+      if (!map || typeof map !== "object") return {};
+      // 允许 value 为 true/1/时间戳
+      const next = {};
+      for (const [k, v] of Object.entries(map)) {
+        if (!k) continue;
+        if (v) next[k] = v;
+      }
+      return next;
+    } catch {
+      return {};
+    }
+  };
+
+  const saveChatFoldState = (foldExpanded) => {
+    try {
+      const map = foldExpanded && typeof foldExpanded === "object" ? foldExpanded : {};
+      const entries = Object.entries(map)
+        .filter(([k, v]) => k && v)
+        .map(([k, v]) => [k, Number.isFinite(Number(v)) ? Number(v) : 1]);
+
+      // 优先保留“最近展开”的（时间戳大者优先）；没有时间戳的按 1 处理放后面
+      entries.sort((a, b) => (Number(b[1]) || 1) - (Number(a[1]) || 1));
+      const pruned = entries.slice(0, CHAT_FOLD_STORAGE_MAX);
+      const next = Object.fromEntries(pruned);
+
+      localStorage.setItem(
+        CHAT_FOLD_STORAGE_KEY,
+        JSON.stringify({ v: 1, savedAt: Date.now(), foldExpanded: next }),
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  const cssEscape = (s) => {
+    const str = String(s ?? "");
+    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(str);
+    // 简易兜底：足够应付我们自己生成的 key
+    return str.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
   };
 
   const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
@@ -279,6 +335,8 @@
           url: s.url || "",
           pageTitle: s.pageTitle || "",
           pageDescription: s.pageDescription || "",
+          // 如果后端返回了页面上下文字段，保留到会话对象上，供“页面上下文”使用
+          pageContent: s.pageContent || s.content || "",
           messageCount,
           messages,
           createdAt,
@@ -330,6 +388,12 @@
     faqSheet: $("#faqSheet"),
     faqList: $("#faqList"),
     faqEmpty: $("#faqEmpty"),
+    contextSheetMask: $("#contextSheetMask"),
+    contextSheet: $("#contextSheet"),
+    contextContent: $("#contextContent"),
+    pageDescSheetMask: $("#pageDescSheetMask"),
+    pageDescSheet: $("#pageDescSheet"),
+    pageDescContent: $("#pageDescContent"),
     pageNews: $("#pageNews"),
     newsSearchCard: $("#newsSearchCard"),
     newsQ: $("#newsQ"),
@@ -705,6 +769,455 @@
       .join("");
   };
 
+  // ---------- 页面上下文 ----------
+  const renderContextSheet = () => {
+    if (!dom.contextContent) return;
+    const s = findSessionById(state.activeSessionId);
+    if (!s) {
+      dom.contextContent.innerHTML = `
+        <div class="contextSection">
+          <div class="contextValue">请返回会话列表重新选择一个会话后再试。</div>
+        </div>
+      `;
+      return;
+    }
+
+    const content = String(s.pageContent || "").trim();
+    if (!content) {
+      dom.contextContent.innerHTML = `
+        <div class="contextSection">
+          <div class="contextValue">当前会话没有保存任何 pageContent 内容。</div>
+        </div>
+      `;
+      return;
+    }
+
+    const contentHtml = renderMarkdown(content);
+    dom.contextContent.innerHTML = `
+      <div class="contextSection">
+        <div class="contextValue">${contentHtml}</div>
+      </div>
+    `;
+  };
+
+  const openContext = () => {
+    if (!dom.contextSheet || !dom.contextSheetMask) return;
+    dom.contextSheetMask.hidden = false;
+    dom.contextSheet.classList.add("is-open");
+    dom.contextSheet.setAttribute("aria-hidden", "false");
+    renderContextSheet();
+  };
+
+  const closeContext = () => {
+    if (!dom.contextSheet || !dom.contextSheetMask) return;
+    dom.contextSheet.classList.remove("is-open");
+    dom.contextSheet.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => {
+      if (!dom.contextSheet.classList.contains("is-open")) dom.contextSheetMask.hidden = true;
+    }, 220);
+  };
+
+  // ---------- 页面描述（pageDescription） ----------
+  const renderPageDescSheet = () => {
+    if (!dom.pageDescContent) return;
+    const s = findSessionById(state.activeSessionId);
+    if (!s) {
+      dom.pageDescContent.innerHTML = `
+        <div class="contextSection">
+          <div class="contextValue">请返回会话列表重新选择一个会话后再试。</div>
+        </div>
+      `;
+      return;
+    }
+
+    const content = String(s.pageDescription || "").trim();
+    if (!content) {
+      dom.pageDescContent.innerHTML = `
+        <div class="contextSection">
+          <div class="contextValue">当前会话没有保存任何 pageDescription 内容。</div>
+        </div>
+      `;
+      return;
+    }
+
+    const contentHtml = renderMarkdown(content);
+    dom.pageDescContent.innerHTML = `
+      <div class="contextSection">
+        <div class="contextValue">${contentHtml}</div>
+      </div>
+    `;
+  };
+
+  const openPageDescription = () => {
+    if (!dom.pageDescSheet || !dom.pageDescSheetMask) return;
+    dom.pageDescSheetMask.hidden = false;
+    dom.pageDescSheet.classList.add("is-open");
+    dom.pageDescSheet.setAttribute("aria-hidden", "false");
+    renderPageDescSheet();
+  };
+
+  const closePageDescription = () => {
+    if (!dom.pageDescSheet || !dom.pageDescSheetMask) return;
+    dom.pageDescSheet.classList.remove("is-open");
+    dom.pageDescSheet.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => {
+      if (!dom.pageDescSheet.classList.contains("is-open")) dom.pageDescSheetMask.hidden = true;
+    }, 220);
+  };
+
+  // 统一的 Prompt 调用封装（参考 YiPet）
+  const PROMPT_API_URL = "https://api.effiy.cn/prompt/";
+  const DEFAULT_MODEL = "qwen3";
+
+  const buildPromptPayload = (systemPrompt, userPrompt, modelId = DEFAULT_MODEL) => {
+    const sys = String(systemPrompt || "").trim();
+    const usr = String(userPrompt || "").trim();
+    const messages = [];
+    if (sys) messages.push({ role: "system", content: sys });
+    if (usr) messages.push({ role: "user", content: usr });
+    return {
+      model: modelId,
+      messages,
+      stream: false,
+    };
+  };
+
+  const callPromptOnce = async (systemPrompt, userPrompt) => {
+    const payload = buildPromptPayload(systemPrompt, userPrompt, DEFAULT_MODEL);
+    const resp = await fetch(PROMPT_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    }
+    // 后端可能返回 JSON，也可能返回 SSE 文本，这里做兼容处理
+    const text = await resp.text();
+    if (!text) return "";
+    // 优先尝试 JSON
+    try {
+      const obj = JSON.parse(text);
+      const content =
+        obj?.content ||
+        obj?.data ||
+        obj?.message?.content ||
+        (Array.isArray(obj?.choices) ? obj.choices.map((c) => c.message?.content || c.delta?.content || "").join("") : "");
+      if (content) return String(content).trim();
+    } catch {
+      // ignore, 可能是 SSE 或纯文本
+    }
+
+    // SSE 兼容（形如多行 "data: {...}"）
+    if (text.includes("data:")) {
+      const lines = text.split("\n");
+      let accumulated = "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const dataStr = trimmed.slice(5).trim();
+        if (!dataStr || dataStr === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(dataStr);
+          if (chunk.done === true) break;
+          if (chunk.data) accumulated += chunk.data;
+          else if (chunk.content) accumulated += chunk.content;
+          else if (chunk.message?.content) accumulated += chunk.message.content;
+        } catch {
+          accumulated += dataStr;
+        }
+      }
+      return accumulated.trim();
+    }
+
+    // 兜底：当作纯文本返回
+    return text.trim();
+  };
+
+  const ensureActiveSessionForContext = () => {
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      window.alert("请先在会话列表中选择一个会话，再使用页面上下文功能。");
+      return null;
+    }
+    const s = findSessionById(sessionId);
+    if (!s) {
+      window.alert("找不到当前会话，请返回列表后重试。");
+      return null;
+    }
+    return s;
+  };
+
+  const ensureActiveSessionForPageDesc = () => {
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      window.alert("请先在会话列表中选择一个会话，再使用页面描述功能。");
+      return null;
+    }
+    const s = findSessionById(sessionId);
+    if (!s) {
+      window.alert("找不到当前会话，请返回列表后重试。");
+      return null;
+    }
+    return s;
+  };
+
+  const withButtonLoading = async (btn, loadingText, fn) => {
+    if (!btn) return fn();
+    const originalText = btn.textContent;
+    const originalDisabled = btn.disabled;
+    btn.disabled = true;
+    if (loadingText) btn.textContent = loadingText;
+    btn.style.opacity = "0.6";
+    btn.style.cursor = "not-allowed";
+    try {
+      return await fn();
+    } finally {
+      btn.disabled = originalDisabled;
+      btn.textContent = originalText;
+      btn.style.opacity = "1";
+      btn.style.cursor = "pointer";
+    }
+  };
+
+  const optimizePageContext = async () => {
+    const s = ensureActiveSessionForContext();
+    if (!s) return;
+    const current = String(s.pageContent || "").trim();
+    if (!current) {
+      window.alert("当前会话没有可优化的页面上下文内容（pageContent）。");
+      return;
+    }
+    const btn = document.querySelector('button[data-action="optimizePageContext"]');
+
+    await withButtonLoading(btn, "优化中...", async () => {
+      let userPrompt = "请在尽量保持原有结构和 Markdown 格式的前提下，对下面的网页上下文进行语言优化，使其更通顺、重点更突出，适合作为 AI 的参考上下文：\n\n";
+      userPrompt += current.substring(0, 4000);
+      userPrompt += "\n\n请直接返回优化后的完整文本，不要添加任何额外说明。";
+
+      const systemPrompt =
+        "你是一个擅长整理网页内容的助手，能够在不改变核心含义的前提下，优化文本表达，并尽量保留原有的 Markdown 结构。";
+      const result = await callPromptOnce(systemPrompt, userPrompt);
+      if (result) {
+        s.pageContent = result;
+        renderContextSheet();
+      }
+    });
+  };
+
+  const translatePageContext = async (targetLanguage) => {
+    const s = ensureActiveSessionForContext();
+    if (!s) return;
+    const originalText = String(s.pageContent || "").trim();
+    if (!originalText) {
+      window.alert("当前会话没有可翻译的页面上下文内容（pageContent）。");
+      return;
+    }
+
+    const btnSelector =
+      targetLanguage === "zh"
+        ? 'button[data-action="translatePageContextZh"]'
+        : 'button[data-action="translatePageContextEn"]';
+    const btn = document.querySelector(btnSelector);
+    const langName = targetLanguage === "zh" ? "中文" : "英文";
+
+    await withButtonLoading(btn, "翻译中...", async () => {
+      const systemPrompt = `你是一个专业的翻译助手，请在尽量保留原有 Markdown 结构的前提下，将以下网页上下文内容翻译成${langName}，保持原意和语气不变，语言自然流畅。请直接返回翻译后的完整文本，不要添加任何说明。`;
+      const userPrompt = `请将下面的网页上下文内容翻译成${langName}：\n\n${originalText}\n\n请直接返回翻译后的完整文本。`;
+      const result = await callPromptOnce(systemPrompt, userPrompt);
+      if (result) {
+        s.pageContent = result;
+        renderContextSheet();
+      }
+    });
+  };
+
+  const savePageContext = async () => {
+    const s = ensureActiveSessionForContext();
+    if (!s) return;
+
+    const content = String(s.pageContent || "").trim();
+    if (!content) {
+      window.alert("当前会话没有可保存的页面上下文内容（pageContent）。");
+      return;
+    }
+
+    const btn = document.querySelector('button[data-action="savePageContext"]');
+    await withButtonLoading(btn, "保存中...", async () => {
+      // 本地已经直接用 s.pageContent，列表展示暂不依赖 pageContent，这里主要是同步到后端
+      try {
+        const now = Date.now();
+        const messagesForBackend = (s.messages || []).map((m) => {
+          const role = normalizeRole(m);
+          return {
+            type: role === "user" ? "user" : "pet",
+            content: normalizeText(m),
+            timestamp: m.ts || m.timestamp || now,
+            imageDataUrl: m.imageDataUrl || m.image || undefined,
+          };
+        });
+
+        const payload = {
+          id: String(s.id),
+          url: s.url || "",
+          pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
+          pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
+          pageContent: content,
+          tags: Array.isArray(s.tags) ? s.tags : [],
+          createdAt: s.createdAt || now,
+          updatedAt: s.updatedAt || now,
+          lastAccessTime: s.lastAccessTime || now,
+          messages: messagesForBackend,
+        };
+
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存页面上下文到后端失败：HTTP", resp.status);
+          window.alert("保存失败，请稍后重试。");
+          return;
+        }
+
+        // 成功即可简单提示
+        window.alert("页面上下文已保存。");
+        closeContext();
+      } catch (e) {
+        console.warn("[YiH5] 保存页面上下文到后端失败：", e);
+        window.alert("保存失败，请检查网络或鉴权配置。");
+      }
+    });
+  };
+
+  const optimizePageDescription = async () => {
+    const s = ensureActiveSessionForPageDesc();
+    if (!s) return;
+    const current = String(s.pageDescription || "").trim();
+    if (!current) {
+      window.alert("当前会话没有可优化的页面描述内容（pageDescription）。");
+      return;
+    }
+    const btn = document.querySelector('button[data-action="optimizePageDescription"]');
+
+    await withButtonLoading(btn, "优化中...", async () => {
+      let userPrompt =
+        "请在尽量保持原意的前提下，对下面的页面描述进行语言优化，使其更清晰、重点更突出，适合作为 AI 的参考描述：\n\n";
+      userPrompt += current.substring(0, 2000);
+      userPrompt += "\n\n请直接返回优化后的完整文本，不要添加任何额外说明。";
+
+      const systemPrompt =
+        "你是一个擅长提炼和优化页面简介的助手，能够在不改变核心含义的前提下，让描述更准确、更易读。";
+      const result = await callPromptOnce(systemPrompt, userPrompt);
+      if (result) {
+        s.pageDescription = result;
+        // 列表摘要优先使用 pageDescription，这里同步一下体验更一致
+        s.preview = result;
+        renderPageDescSheet();
+      }
+    });
+  };
+
+  const translatePageDescription = async (targetLanguage) => {
+    const s = ensureActiveSessionForPageDesc();
+    if (!s) return;
+    const originalText = String(s.pageDescription || "").trim();
+    if (!originalText) {
+      window.alert("当前会话没有可翻译的页面描述内容（pageDescription）。");
+      return;
+    }
+
+    const btnSelector =
+      targetLanguage === "zh"
+        ? 'button[data-action="translatePageDescriptionZh"]'
+        : 'button[data-action="translatePageDescriptionEn"]';
+    const btn = document.querySelector(btnSelector);
+    const langName = targetLanguage === "zh" ? "中文" : "英文";
+
+    await withButtonLoading(btn, "翻译中...", async () => {
+      const systemPrompt = `你是一个专业的翻译助手，请将以下页面描述翻译成${langName}，保持原意和语气不变，语言自然流畅。请直接返回翻译后的完整文本，不要添加任何说明。`;
+      const userPrompt = `请将下面的页面描述翻译成${langName}：\n\n${originalText}\n\n请直接返回翻译后的完整文本。`;
+      const result = await callPromptOnce(systemPrompt, userPrompt);
+      if (result) {
+        s.pageDescription = result;
+        s.preview = result;
+        renderPageDescSheet();
+      }
+    });
+  };
+
+  const savePageDescription = async () => {
+    const s = ensureActiveSessionForPageDesc();
+    if (!s) return;
+
+    const content = String(s.pageDescription || "").trim();
+    if (!content) {
+      window.alert("当前会话没有可保存的页面描述内容（pageDescription）。");
+      return;
+    }
+
+    const btn = document.querySelector('button[data-action="savePageDescription"]');
+    await withButtonLoading(btn, "保存中...", async () => {
+      try {
+        const now = Date.now();
+        const messagesForBackend = (s.messages || []).map((m) => {
+          const role = normalizeRole(m);
+          return {
+            type: role === "user" ? "user" : "pet",
+            content: normalizeText(m),
+            timestamp: m.ts || m.timestamp || now,
+            imageDataUrl: m.imageDataUrl || m.image || undefined,
+          };
+        });
+
+        const pageContentToSend = String(s.pageContent || "").trim();
+        const payload = {
+          id: String(s.id),
+          url: s.url || "",
+          pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
+          pageDescription: content,
+          // 注意：仅在本地确实有 pageContent 时才一起带上，避免用空值覆盖后端已有页面上下文
+          pageContent: pageContentToSend || undefined,
+          tags: Array.isArray(s.tags) ? s.tags : [],
+          createdAt: s.createdAt || now,
+          updatedAt: s.updatedAt || now,
+          lastAccessTime: s.lastAccessTime || now,
+          messages: messagesForBackend,
+        };
+
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存页面描述到后端失败：HTTP", resp.status);
+          window.alert("保存失败，请稍后重试。");
+          return;
+        }
+
+        window.alert("页面描述已保存。");
+        s.preview = content;
+        closePageDescription();
+      } catch (e) {
+        console.warn("[YiH5] 保存页面描述到后端失败：", e);
+        window.alert("保存失败，请检查网络或鉴权配置。");
+      }
+    });
+  };
+
   const openFaq = async () => {
     if (!dom.faqSheet || !dom.faqSheetMask) return;
     dom.faqSheetMask.hidden = false;
@@ -723,26 +1236,83 @@
     }, 220);
   };
 
-  const insertFaqText = (text) => {
-    const input = dom.chatInput;
-    if (!input) return;
+  // 将 FAQ 文本追加到当前会话消息中，并调用 session/save 接口
+  const appendFaqToSessionAndSave = async (text) => {
     const toInsert = String(text ?? "").trim();
     if (!toInsert) return;
 
-    const value = String(input.value ?? "");
-    const start = Number.isFinite(input.selectionStart) ? input.selectionStart : value.length;
-    const end = Number.isFinite(input.selectionEnd) ? input.selectionEnd : value.length;
-    const next = value.slice(0, start) + toInsert + value.slice(end);
-    input.value = next;
-
-    const caret = start + toInsert.length;
-    try {
-      input.setSelectionRange(caret, caret);
-    } catch {
-      // ignore
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      window.alert("请先在会话列表中选择一个会话，再使用常见问题。");
+      return;
     }
-    input.focus();
+
+    const s = findSessionById(sessionId);
+    if (!s) {
+      window.alert("找不到当前会话，请返回列表后重试。");
+      return;
+    }
+
+    if (!Array.isArray(s.messages)) s.messages = [];
+
+    const now = Date.now();
+    // 追加用户消息
+    s.messages.push({ role: "user", content: toInsert, ts: now });
+    s.messageCount = s.messages.length;
+    s.lastActiveAt = now;
+    s.lastAccessTime = now;
+    s.updatedAt = now;
+    s.preview = toInsert;
+
+    // 先本地更新 UI
+    renderChat();
+    // 关闭 FAQ 弹层
     closeFaq();
+
+    // 构造与 YiPet 后端兼容的会话保存数据，并调用 https://api.effiy.cn/session/save
+    try {
+      const messagesForBackend = (s.messages || []).map((m) => {
+        const role = normalizeRole(m); // 'user' | 'assistant'
+        return {
+          type: role === "user" ? "user" : "pet",
+          content: normalizeText(m),
+          timestamp: m.ts || m.timestamp || Date.now(),
+          imageDataUrl: m.imageDataUrl || m.image || undefined,
+        };
+      });
+
+      const payload = {
+        id: String(s.id),
+        url: s.url || "",
+        pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
+        pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
+        pageContent: s.pageContent || "",
+        tags: Array.isArray(s.tags) ? s.tags : [],
+        createdAt: s.createdAt || now,
+        updatedAt: s.updatedAt || now,
+        lastAccessTime: s.lastAccessTime || now,
+        messages: messagesForBackend,
+      };
+
+      const resp = await fetch("https://api.effiy.cn/session/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
+        return;
+      }
+
+      const data = await resp.json().catch(() => null);
+      console.log("[YiH5] FAQ 已追加并保存到后端:", data);
+    } catch (e) {
+      console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
+    }
   };
 
   // 返回按钮：只在聊天页挂载（首页不渲染也不提供功能）
@@ -813,7 +1383,7 @@
       </div>`;
     } else {
       dom.chatMessages.innerHTML = msgs
-        .map((m) => {
+        .map((m, idx) => {
           // 确保消息对象有效
           if (!m || typeof m !== 'object') return '';
           const role = normalizeRole(m);
@@ -826,12 +1396,16 @@
           // 构建消息内容
           let contentHtml = "";
           if (imageDataUrl) {
-            contentHtml += `<div class="chatImage" style="max-width: 200px; margin-bottom: 8px;">
+            contentHtml += `<div class="chatImage" style="max-width: 200px; margin-bottom: 6px;">
               <img src="${escapeHtml(imageDataUrl)}" alt="图片" style="max-width: 100%; border-radius: 4px;" />
             </div>`;
           }
           if (text) {
-            contentHtml += `<div class="chatBubble chatBubble--md">${renderMarkdown(text)}</div>`;
+            contentHtml += `
+              <div class="chatBubbleWrap">
+                <div class="chatBubble chatBubble--md">${renderMarkdown(text)}</div>
+              </div>
+            `;
           }
           if (!imageDataUrl && !text) {
             contentHtml = `<div class="chatBubble">…</div>`;
@@ -934,6 +1508,8 @@
           if (sessionData.pageTitle) s.pageTitle = sessionData.pageTitle;
           if (sessionData.pageDescription) s.pageDescription = sessionData.pageDescription;
           if (sessionData.preview) s.preview = sessionData.preview;
+          // 如果接口返回了页面上下文，更新到会话上
+          if (sessionData.pageContent) s.pageContent = sessionData.pageContent;
         }
       }
       
@@ -1596,6 +2172,42 @@
   const onAction = (el, action, ev) => {
     if (!action) return;
     if (action === "noop") return;
+    // 图片预览（点击放大/长按保存）
+    if (action === "closeImgPreview") return closeImgPreview();
+    if (action === "closeImgPreviewActions") return hideImgPreviewActions();
+    if (action === "imgPreviewPrev") return setImgPreviewIndex(imgPreviewState.index - 1);
+    if (action === "imgPreviewNext") return setImgPreviewIndex(imgPreviewState.index + 1);
+    if (action === "saveImgPreview") {
+      const src = imgPreviewState.src;
+      hideImgPreviewActions();
+      if (!src) return;
+      // iOS：优先打开新页，让用户长按“保存到相册”（比 download 更符合相册预期）
+      if (isIOS()) {
+        try {
+          window.open(src, "_blank", "noopener,noreferrer");
+        } catch {
+          // ignore
+        }
+        showImgPreviewToast("已打开图片新页面：请在新页面长按“保存到相册”");
+        return;
+      }
+
+      showImgPreviewToast("正在准备保存…");
+      saveImageByUrl(src).then((ok) => {
+        if (ok) {
+          showImgPreviewToast("已开始下载图片（如在部分 App 内，请到“下载/文件”中查看）");
+          return;
+        }
+        // 兜底：打开新页，交给系统长按保存
+        try {
+          window.open(src, "_blank", "noopener,noreferrer");
+        } catch {
+          // ignore
+        }
+        window.alert("无法自动保存（可能是图片跨域限制）。已为你打开图片新页面，请在新页面长按“保存到相册”。");
+      });
+      return;
+    }
     if (action === "openFilter") return openFilter();
     if (action === "openNewsFilter") return openNewsFilter();
     if (action === "closeFilter") return closeFilter();
@@ -1608,15 +2220,27 @@
     }
     if (action === "resetFilter") return resetFilter();
     if (action === "openFaq") return openFaq();
+    if (action === "openContext") return openContext();
+    if (action === "openPageDescription") return openPageDescription();
     if (action === "openAuth") return openAuth();
     if (action === "closeFaq") return closeFaq();
+    if (action === "closeContext") return closeContext();
+    if (action === "closePageDescription") return closePageDescription();
     if (action === "manualRefresh") return manualRefresh();
     if (action === "refreshFaq") return refreshFaq();
     if (action === "refreshSessions") return refreshSessions();
     if (action === "insertFaq") {
       const t = el.dataset.faqText;
-      return insertFaqText(t);
+      return appendFaqToSessionAndSave(t);
     }
+    if (action === "optimizePageContext") return optimizePageContext();
+    if (action === "translatePageContextZh") return translatePageContext("zh");
+    if (action === "translatePageContextEn") return translatePageContext("en");
+    if (action === "savePageContext") return savePageContext();
+    if (action === "optimizePageDescription") return optimizePageDescription();
+    if (action === "translatePageDescriptionZh") return translatePageDescription("zh");
+    if (action === "translatePageDescriptionEn") return translatePageDescription("en");
+    if (action === "savePageDescription") return savePageDescription();
     if (action === "switchBottomTab") {
       const tab = el.dataset.tab || "sessions";
       return setBottomTab(tab);
@@ -1753,6 +2377,9 @@
       onAction(el, action, ev);
     });
 
+    // 图片预览（点击放大 / 长按保存）
+    wireImagePreview();
+
     // 点击会话进入聊天
     dom.list?.addEventListener("click", (ev) => {
       const item = ev.target.closest(".item");
@@ -1787,16 +2414,431 @@
     // masks
     dom.sheetMask.addEventListener("click", closeFilter);
     dom.faqSheetMask?.addEventListener("click", closeFaq);
+    dom.contextSheetMask?.addEventListener("click", closeContext);
+    dom.pageDescSheetMask?.addEventListener("click", closePageDescription);
 
     // mobile: prevent overscroll glow inside sheets
-    ["sheet"].forEach((k) => {
+    ["sheet", "faqSheet", "contextSheet", "pageDescSheet"].forEach((k) => {
       const el = dom[k];
-      el.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+      el?.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
     });
+  };
+
+  // ---------- Image preview / long-press save ----------
+  const IMG_LONG_PRESS_MS = 600;
+  const IMG_LONG_PRESS_MOVE_PX = 12;
+
+  const isInWeChat = () => /MicroMessenger/i.test(navigator.userAgent || "");
+  const hasWxPreview = () => {
+    try {
+      return !!(window.wx && typeof window.wx.previewImage === "function");
+    } catch {
+      return false;
+    }
+  };
+
+  const isIOS = () => /iPad|iPhone|iPod/i.test(navigator.userAgent || "");
+
+  const isEligiblePreviewImg = (imgEl) => {
+    if (!imgEl || imgEl.tagName !== "IMG") return false;
+    // 排除预览层内部的 img（避免递归触发）
+    if (imgEl.closest?.("#imgPreviewOverlay")) return false;
+    // 只对聊天、上下文、页面描述等内容区生效
+    return !!imgEl.closest?.(
+      ".chatPage__messages, .chatBubble--md, .contextContent, #contextContent, #pageDescContent, .sheet",
+    );
+  };
+
+  const collectSiblingImageUrls = (imgEl) => {
+    const root =
+      imgEl.closest?.(".chatPage__messages") ||
+      imgEl.closest?.(".contextContent") ||
+      imgEl.closest?.("#contextContent") ||
+      imgEl.closest?.("#pageDescContent") ||
+      imgEl.closest?.(".sheet") ||
+      document;
+    const imgs = Array.from(root.querySelectorAll("img"));
+    const urls = imgs
+      .map((x) => String(x.currentSrc || x.src || "").trim())
+      .filter(Boolean);
+    // 去重但保序
+    const seen = new Set();
+    const uniq = [];
+    for (const u of urls) {
+      if (seen.has(u)) continue;
+      seen.add(u);
+      uniq.push(u);
+    }
+    return uniq;
+  };
+
+  const createImagePreviewOverlay = () => {
+    if (document.getElementById("imgPreviewOverlay")) return;
+    const overlay = document.createElement("div");
+    overlay.id = "imgPreviewOverlay";
+    overlay.className = "imgPreviewOverlay";
+    overlay.hidden = true;
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.innerHTML = `
+      <div class="imgPreviewOverlay__backdrop" data-action="closeImgPreview"></div>
+      <div class="imgPreviewOverlay__topbar">
+        <div class="imgPreviewOverlay__count" id="imgPreviewCount" hidden></div>
+        <button type="button" class="imgPreviewOverlay__close" data-action="closeImgPreview" aria-label="关闭预览" title="关闭">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M18.3 5.7a1 1 0 0 1 0 1.4L13.4 12l4.9 4.9a1 1 0 1 1-1.4 1.4L12 13.4l-4.9 4.9a1 1 0 1 1-1.4-1.4L10.6 12 5.7 7.1a1 1 0 0 1 1.4-1.4L12 10.6l4.9-4.9a1 1 0 0 1 1.4 0Z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="imgPreviewOverlay__content">
+        <button type="button" class="imgPreviewNav imgPreviewNav--prev" id="imgPreviewPrevBtn" data-action="imgPreviewPrev" aria-label="上一张" title="上一张" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14.7 6.7a1 1 0 0 1 0 1.4L10.8 12l3.9 3.9a1 1 0 1 1-1.4 1.4l-4.6-4.6a1 1 0 0 1 0-1.4l4.6-4.6a1 1 0 0 1 1.4 0Z"/>
+          </svg>
+        </button>
+        <img id="imgPreviewImg" class="imgPreviewOverlay__img" alt="预览图片" />
+        <button type="button" class="imgPreviewNav imgPreviewNav--next" id="imgPreviewNextBtn" data-action="imgPreviewNext" aria-label="下一张" title="下一张" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9.3 17.3a1 1 0 0 1 0-1.4l3.9-3.9-3.9-3.9a1 1 0 1 1 1.4-1.4l4.6 4.6a1 1 0 0 1 0 1.4l-4.6 4.6a1 1 0 0 1-1.4 0Z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="imgPreviewOverlay__hint">
+        <div class="imgPreviewOverlay__hintText">点击空白处关闭 · 长按图片可保存</div>
+      </div>
+      <div class="imgPreviewToast" id="imgPreviewToast" aria-hidden="true">
+        <div class="imgPreviewToast__text" id="imgPreviewToastText"> </div>
+      </div>
+      <div class="imgPreviewActions" id="imgPreviewActions" hidden>
+        <div class="imgPreviewActions__panel">
+          <button type="button" class="imgPreviewActions__btn is-primary" data-action="saveImgPreview">保存图片</button>
+          <button type="button" class="imgPreviewActions__btn is-cancel" data-action="closeImgPreviewActions">取消</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  };
+
+  const imgPreviewState = {
+    open: false,
+    src: "",
+    urls: [],
+    index: 0,
+    lastLongPressAt: 0,
+    longPressTimer: null,
+    pressStart: null, // { x, y, pointerId }
+    swipeStart: null, // { x, y, pointerId }
+  };
+
+  const setImgPreviewOpen = (open) => {
+    createImagePreviewOverlay();
+    const overlay = document.getElementById("imgPreviewOverlay");
+    if (!overlay) return;
+    imgPreviewState.open = !!open;
+    overlay.hidden = !open;
+    overlay.setAttribute("aria-hidden", open ? "false" : "true");
+    document.body.classList.toggle("is-imgPreviewOpen", open);
+    if (!open) {
+      imgPreviewState.src = "";
+      imgPreviewState.urls = [];
+      imgPreviewState.index = 0;
+      const img = document.getElementById("imgPreviewImg");
+      if (img) img.removeAttribute("src");
+      hideImgPreviewActions();
+    }
+  };
+
+  const syncImgPreviewNav = () => {
+    const prevBtn = document.getElementById("imgPreviewPrevBtn");
+    const nextBtn = document.getElementById("imgPreviewNextBtn");
+    const countEl = document.getElementById("imgPreviewCount");
+    const total = Array.isArray(imgPreviewState.urls) ? imgPreviewState.urls.length : 0;
+    const idx = Number(imgPreviewState.index) || 0;
+    const showNav = total > 1;
+    if (prevBtn) prevBtn.hidden = !showNav;
+    if (nextBtn) nextBtn.hidden = !showNav;
+    if (countEl) {
+      countEl.hidden = total <= 1;
+      countEl.textContent = total > 1 ? `${Math.min(idx + 1, total)}/${total}` : "";
+    }
+  };
+
+  const setImgPreviewIndex = (nextIndex) => {
+    const urls = Array.isArray(imgPreviewState.urls) ? imgPreviewState.urls : [];
+    if (urls.length === 0) return;
+    let idx = Number(nextIndex);
+    if (!Number.isFinite(idx)) idx = 0;
+    // 循环切换
+    idx = ((idx % urls.length) + urls.length) % urls.length;
+    const url = String(urls[idx] || "").trim();
+    if (!url) return;
+    createImagePreviewOverlay();
+    const img = document.getElementById("imgPreviewImg");
+    if (img) img.src = url;
+    imgPreviewState.index = idx;
+    imgPreviewState.src = url;
+    syncImgPreviewNav();
+  };
+
+  const openImgPreview = (src, { urls = null } = {}) => {
+    const url = String(src || "").trim();
+    if (!url) return;
+    createImagePreviewOverlay();
+    const list = Array.isArray(urls) && urls.length ? urls : [url];
+    imgPreviewState.urls = list;
+    const idx = list.indexOf(url);
+    imgPreviewState.index = idx >= 0 ? idx : 0;
+    setImgPreviewOpen(true);
+    setImgPreviewIndex(imgPreviewState.index);
+  };
+
+  const closeImgPreview = () => setImgPreviewOpen(false);
+
+  const showImgPreviewToast = (text, { ms = 1600 } = {}) => {
+    const toast = document.getElementById("imgPreviewToast");
+    const t = document.getElementById("imgPreviewToastText");
+    if (!toast || !t) return;
+    t.textContent = String(text || "");
+    toast.classList.add("is-show");
+    window.setTimeout(() => toast.classList.remove("is-show"), ms);
+  };
+
+  const showImgPreviewActions = () => {
+    const box = document.getElementById("imgPreviewActions");
+    if (!box) return;
+    box.hidden = false;
+  };
+
+  const hideImgPreviewActions = () => {
+    const box = document.getElementById("imgPreviewActions");
+    if (!box) return;
+    box.hidden = true;
+  };
+
+  const dataUrlToBlob = (dataUrl) => {
+    const s = String(dataUrl || "");
+    const comma = s.indexOf(",");
+    if (comma < 0) return null;
+    const header = s.slice(0, comma);
+    const base64 = s.slice(comma + 1);
+    const m = header.match(/data:([^;]+);base64/i);
+    const mime = m ? m[1] : "application/octet-stream";
+    try {
+      const bin = atob(base64);
+      const len = bin.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type: mime });
+    } catch {
+      return null;
+    }
+  };
+
+  const pickExtByMime = (mime) => {
+    const m = String(mime || "").toLowerCase();
+    if (m.includes("png")) return "png";
+    if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+    if (m.includes("gif")) return "gif";
+    if (m.includes("webp")) return "webp";
+    if (m.includes("bmp")) return "bmp";
+    return "png";
+  };
+
+  const triggerDownloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || "image";
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const saveImageByUrl = async (src) => {
+    const url = String(src || "").trim();
+    if (!url) return false;
+
+    // data url：直接转 blob
+    if (url.startsWith("data:")) {
+      const blob = dataUrlToBlob(url);
+      if (!blob) return false;
+      const ext = pickExtByMime(blob.type);
+      triggerDownloadBlob(blob, `image_${Date.now()}.${ext}`);
+      return true;
+    }
+
+    // 尝试 fetch（需要 CORS 允许）
+    try {
+      const resp = await fetch(url, { mode: "cors", cache: "force-cache" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const ext = pickExtByMime(blob.type);
+      triggerDownloadBlob(blob, `image_${Date.now()}.${ext}`);
+      return true;
+    } catch (e) {
+      console.warn("[YiH5] 保存图片失败，可能是跨域/无 CORS：", e);
+      return false;
+    }
+  };
+
+  const wireImagePreview = () => {
+    createImagePreviewOverlay();
+
+    // 点击图片：打开预览（但要避免长按触发后的 click）
+    document.addEventListener("click", (ev) => {
+      const now = Date.now();
+      if (imgPreviewState.lastLongPressAt && now - imgPreviewState.lastLongPressAt < 450) return;
+      const img = ev.target?.closest?.("img");
+      if (!img || !isEligiblePreviewImg(img)) return;
+      const src = img.currentSrc || img.src || "";
+      if (!src) return;
+
+      // 微信环境：优先使用 wx.previewImage（自带保存到相册）
+      if (isInWeChat() && hasWxPreview()) {
+        const urls = collectSiblingImageUrls(img);
+        try {
+          window.wx.previewImage({
+            current: src,
+            urls: urls.length ? urls : [src],
+          });
+          return;
+        } catch (e) {
+          console.warn("[YiH5] wx.previewImage 调用失败，回退自定义预览：", e);
+        }
+      }
+
+      openImgPreview(src, { urls: collectSiblingImageUrls(img) });
+    });
+
+    // 长按图片：直接进入预览并弹出“保存”
+    const cancelLongPress = () => {
+      if (imgPreviewState.longPressTimer) {
+        window.clearTimeout(imgPreviewState.longPressTimer);
+        imgPreviewState.longPressTimer = null;
+      }
+      imgPreviewState.pressStart = null;
+    };
+
+    document.addEventListener(
+      "pointerdown",
+      (ev) => {
+        const img = ev.target?.closest?.("img");
+        if (!img || !isEligiblePreviewImg(img)) return;
+        if (!ev.isPrimary) return;
+
+        cancelLongPress();
+        imgPreviewState.pressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
+        imgPreviewState.longPressTimer = window.setTimeout(() => {
+          const src = img.currentSrc || img.src || "";
+          if (!src) return;
+          imgPreviewState.lastLongPressAt = Date.now();
+          // 微信：直接用微信预览（自带保存）
+          if (isInWeChat() && hasWxPreview()) {
+            const urls = collectSiblingImageUrls(img);
+            try {
+              window.wx.previewImage({ current: src, urls: urls.length ? urls : [src] });
+              return;
+            } catch (e) {
+              console.warn("[YiH5] wx.previewImage 调用失败，回退自定义预览：", e);
+            }
+          }
+          openImgPreview(src, { urls: collectSiblingImageUrls(img) });
+          showImgPreviewActions();
+        }, IMG_LONG_PRESS_MS);
+      },
+      { passive: true },
+    );
+
+    document.addEventListener(
+      "pointermove",
+      (ev) => {
+        const p = imgPreviewState.pressStart;
+        if (!p) return;
+        if (p.pointerId !== ev.pointerId) return;
+        const dx = ev.clientX - p.x;
+        const dy = ev.clientY - p.y;
+        if (Math.hypot(dx, dy) > IMG_LONG_PRESS_MOVE_PX) cancelLongPress();
+      },
+      { passive: true },
+    );
+
+    document.addEventListener("pointerup", cancelLongPress, { passive: true });
+    document.addEventListener("pointercancel", cancelLongPress, { passive: true });
+
+    // 预览层内：长按图片也弹出保存
+    const overlay = document.getElementById("imgPreviewOverlay");
+    overlay?.addEventListener(
+      "pointerdown",
+      (ev) => {
+        const img = ev.target?.closest?.("#imgPreviewImg");
+        if (!img) return;
+        if (!ev.isPrimary) return;
+        cancelLongPress();
+        imgPreviewState.pressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
+        imgPreviewState.swipeStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
+        imgPreviewState.longPressTimer = window.setTimeout(() => {
+          imgPreviewState.lastLongPressAt = Date.now();
+          showImgPreviewActions();
+        }, IMG_LONG_PRESS_MS);
+      },
+      { passive: true },
+    );
+    overlay?.addEventListener(
+      "pointermove",
+      (ev) => {
+        const p = imgPreviewState.pressStart;
+        if (!p) return;
+        if (p.pointerId !== ev.pointerId) return;
+        const dx = ev.clientX - p.x;
+        const dy = ev.clientY - p.y;
+        if (Math.hypot(dx, dy) > IMG_LONG_PRESS_MOVE_PX) cancelLongPress();
+      },
+      { passive: true },
+    );
+    overlay?.addEventListener(
+      "pointerup",
+      (ev) => {
+        const s = imgPreviewState.swipeStart;
+        // 先清掉长按计时
+        cancelLongPress();
+        if (!s || s.pointerId !== ev.pointerId) {
+          imgPreviewState.swipeStart = null;
+          return;
+        }
+        const dx = ev.clientX - s.x;
+        const dy = ev.clientY - s.y;
+        imgPreviewState.swipeStart = null;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        // 横向明显滑动才算（避免误触）
+        if (absX < 40) return;
+        if (absX < absY * 1.2) return;
+        if (!Array.isArray(imgPreviewState.urls) || imgPreviewState.urls.length <= 1) return;
+        if (dx < 0) setImgPreviewIndex(imgPreviewState.index + 1);
+        else setImgPreviewIndex(imgPreviewState.index - 1);
+      },
+      { passive: true },
+    );
+    overlay?.addEventListener(
+      "pointercancel",
+      () => {
+        cancelLongPress();
+        imgPreviewState.swipeStart = null;
+      },
+      { passive: true },
+    );
   };
 
   const init = async () => {
     loadAuthFromStorage();
+    // 恢复折叠展开状态（跨会话/返回仍保留）
+    try {
+      state.chatUi.foldExpanded = loadChatFoldState();
+    } catch {
+      state.chatUi.foldExpanded = {};
+    }
     // 默认显示今天（并按今天过滤）；用户仍可手动清空日期来取消过滤
     setSelectedDate(dateUtil.todayYMD(), { syncPicker: true, render: false });
     // 默认显示会话视图（不读取 localStorage，始终默认会话）
@@ -1813,6 +2855,7 @@
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
