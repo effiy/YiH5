@@ -390,7 +390,8 @@ input{border:0;outline:none}
   backdrop-filter: saturate(140%) blur(16px);
 }
 .chatComposer__btn--faq,
-.chatComposer__btn--context{
+.chatComposer__btn--context,
+.chatComposer__btn--url{
   min-width:64px;
   height:40px;
   border-radius:999px;
@@ -410,7 +411,8 @@ input{border:0;outline:none}
   padding:0 20px;
 }
 .chatComposer__btn--faq:active,
-.chatComposer__btn--context:active{
+.chatComposer__btn--context:active,
+.chatComposer__btn--url:active{
   opacity:.85;
 }
 .chatComposer__btnLabel{
@@ -419,7 +421,8 @@ input{border:0;outline:none}
   line-height:1;
 }
 .chatComposer__btn--faq svg,
-.chatComposer__btn--context svg{
+.chatComposer__btn--context svg,
+.chatComposer__btn--url svg{
   width:18px;
   height:18px;
   flex:none;
@@ -927,7 +930,7 @@ input{border:0;outline:none}
   .chatBubbleWrap.is-collapsible .chatBubble{transition:none}
 }
 
-/* ---------- 图片预览（点击放大/长按保存） ---------- */
+/* ---------- 图片预览（点击放大） ---------- */
 .imgPreviewOverlay{
   position:fixed;
   inset:0;

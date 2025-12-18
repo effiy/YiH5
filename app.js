@@ -384,6 +384,7 @@
     chatComposer: $("#chatComposer"),
     chatInput: $("#chatInput"),
     faqBtn: $("#faqBtn"),
+    openUrlBtn: $("#openUrlBtn"),
     faqSheetMask: $("#faqSheetMask"),
     faqSheet: $("#faqSheet"),
     faqList: $("#faqList"),
@@ -1227,6 +1228,26 @@
     await fetchFaqs();
   };
 
+  const openUrl = () => {
+    const s = findSessionById(state.activeSessionId);
+    if (!s) {
+      window.alert("找不到当前会话，请返回列表后重试。");
+      return;
+    }
+    const url = String(s.url || "").trim();
+    if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+      window.alert("当前会话没有有效的URL。");
+      return;
+    }
+    // 在新标签页中打开URL
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      console.warn("[YiH5] 打开URL失败：", e);
+      window.alert("无法打开URL，请检查URL格式是否正确。");
+    }
+  };
+
   const closeFaq = () => {
     if (!dom.faqSheet || !dom.faqSheetMask) return;
     dom.faqSheet.classList.remove("is-open");
@@ -1368,11 +1389,22 @@
         <div class="empty__title">找不到该会话</div>
         <div class="empty__desc">请返回会话列表重试</div>
       </div>`;
+      // 找不到会话时隐藏"打开原文"按钮
+      if (dom.openUrlBtn) {
+        dom.openUrlBtn.hidden = true;
+      }
       return;
     }
 
     const title = (s.pageTitle && s.pageTitle.trim()) || s.title || "会话";
     dom.chatTitle.textContent = title;
+
+    // 控制"打开原文"按钮的显示/隐藏：如果URL以http开头则显示
+    const url = String(s.url || "").trim();
+    const shouldShowOpenUrlBtn = url && (url.startsWith("http://") || url.startsWith("https://"));
+    if (dom.openUrlBtn) {
+      dom.openUrlBtn.hidden = !shouldShowOpenUrlBtn;
+    }
 
     const msgs = Array.isArray(s.messages) ? s.messages.filter(m => m != null) : [];
     if (msgs.length === 0) {
@@ -2220,6 +2252,7 @@
     }
     if (action === "resetFilter") return resetFilter();
     if (action === "openFaq") return openFaq();
+    if (action === "openUrl") return openUrl();
     if (action === "openContext") return openContext();
     if (action === "openPageDescription") return openPageDescription();
     if (action === "openAuth") return openAuth();
@@ -2424,9 +2457,7 @@
     });
   };
 
-  // ---------- Image preview / long-press save ----------
-  const IMG_LONG_PRESS_MS = 600;
-  const IMG_LONG_PRESS_MOVE_PX = 12;
+  // ---------- Image preview ----------
 
   const isInWeChat = () => /MicroMessenger/i.test(navigator.userAgent || "");
   const hasWxPreview = () => {
@@ -2503,7 +2534,7 @@
         </button>
       </div>
       <div class="imgPreviewOverlay__hint">
-        <div class="imgPreviewOverlay__hintText">点击空白处关闭 · 长按图片可保存</div>
+        <div class="imgPreviewOverlay__hintText">点击空白处关闭</div>
       </div>
       <div class="imgPreviewToast" id="imgPreviewToast" aria-hidden="true">
         <div class="imgPreviewToast__text" id="imgPreviewToastText"> </div>
@@ -2523,9 +2554,6 @@
     src: "",
     urls: [],
     index: 0,
-    lastLongPressAt: 0,
-    longPressTimer: null,
-    pressStart: null, // { x, y, pointerId }
     swipeStart: null, // { x, y, pointerId }
   };
 
@@ -2686,10 +2714,8 @@
   const wireImagePreview = () => {
     createImagePreviewOverlay();
 
-    // 点击图片：打开预览（但要避免长按触发后的 click）
+    // 点击图片：打开预览
     document.addEventListener("click", (ev) => {
-      const now = Date.now();
-      if (imgPreviewState.lastLongPressAt && now - imgPreviewState.lastLongPressAt < 450) return;
       const img = ev.target?.closest?.("img");
       if (!img || !isEligiblePreviewImg(img)) return;
       const src = img.currentSrc || img.src || "";
@@ -2712,62 +2738,7 @@
       openImgPreview(src, { urls: collectSiblingImageUrls(img) });
     });
 
-    // 长按图片：直接进入预览并弹出“保存”
-    const cancelLongPress = () => {
-      if (imgPreviewState.longPressTimer) {
-        window.clearTimeout(imgPreviewState.longPressTimer);
-        imgPreviewState.longPressTimer = null;
-      }
-      imgPreviewState.pressStart = null;
-    };
-
-    document.addEventListener(
-      "pointerdown",
-      (ev) => {
-        const img = ev.target?.closest?.("img");
-        if (!img || !isEligiblePreviewImg(img)) return;
-        if (!ev.isPrimary) return;
-
-        cancelLongPress();
-        imgPreviewState.pressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
-        imgPreviewState.longPressTimer = window.setTimeout(() => {
-          const src = img.currentSrc || img.src || "";
-          if (!src) return;
-          imgPreviewState.lastLongPressAt = Date.now();
-          // 微信：直接用微信预览（自带保存）
-          if (isInWeChat() && hasWxPreview()) {
-            const urls = collectSiblingImageUrls(img);
-            try {
-              window.wx.previewImage({ current: src, urls: urls.length ? urls : [src] });
-              return;
-            } catch (e) {
-              console.warn("[YiH5] wx.previewImage 调用失败，回退自定义预览：", e);
-            }
-          }
-          openImgPreview(src, { urls: collectSiblingImageUrls(img) });
-          showImgPreviewActions();
-        }, IMG_LONG_PRESS_MS);
-      },
-      { passive: true },
-    );
-
-    document.addEventListener(
-      "pointermove",
-      (ev) => {
-        const p = imgPreviewState.pressStart;
-        if (!p) return;
-        if (p.pointerId !== ev.pointerId) return;
-        const dx = ev.clientX - p.x;
-        const dy = ev.clientY - p.y;
-        if (Math.hypot(dx, dy) > IMG_LONG_PRESS_MOVE_PX) cancelLongPress();
-      },
-      { passive: true },
-    );
-
-    document.addEventListener("pointerup", cancelLongPress, { passive: true });
-    document.addEventListener("pointercancel", cancelLongPress, { passive: true });
-
-    // 预览层内：长按图片也弹出保存
+    // 预览层内：滑动切换图片
     const overlay = document.getElementById("imgPreviewOverlay");
     overlay?.addEventListener(
       "pointerdown",
@@ -2775,25 +2746,7 @@
         const img = ev.target?.closest?.("#imgPreviewImg");
         if (!img) return;
         if (!ev.isPrimary) return;
-        cancelLongPress();
-        imgPreviewState.pressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
         imgPreviewState.swipeStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId };
-        imgPreviewState.longPressTimer = window.setTimeout(() => {
-          imgPreviewState.lastLongPressAt = Date.now();
-          showImgPreviewActions();
-        }, IMG_LONG_PRESS_MS);
-      },
-      { passive: true },
-    );
-    overlay?.addEventListener(
-      "pointermove",
-      (ev) => {
-        const p = imgPreviewState.pressStart;
-        if (!p) return;
-        if (p.pointerId !== ev.pointerId) return;
-        const dx = ev.clientX - p.x;
-        const dy = ev.clientY - p.y;
-        if (Math.hypot(dx, dy) > IMG_LONG_PRESS_MOVE_PX) cancelLongPress();
       },
       { passive: true },
     );
@@ -2801,8 +2754,6 @@
       "pointerup",
       (ev) => {
         const s = imgPreviewState.swipeStart;
-        // 先清掉长按计时
-        cancelLongPress();
         if (!s || s.pointerId !== ev.pointerId) {
           imgPreviewState.swipeStart = null;
           return;
@@ -2824,7 +2775,6 @@
     overlay?.addEventListener(
       "pointercancel",
       () => {
-        cancelLongPress();
         imgPreviewState.swipeStart = null;
       },
       { passive: true },
