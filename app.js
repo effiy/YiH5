@@ -801,11 +801,36 @@
     `;
   };
 
-  const openContext = () => {
+  const openContext = async () => {
     if (!dom.contextSheet || !dom.contextSheetMask) return;
+    
+    const sessionId = state.activeSessionId;
+    if (!sessionId) {
+      window.alert("请先在会话列表中选择一个会话，再使用页面上下文功能。");
+      return;
+    }
+    
+    // 先显示弹层
     dom.contextSheetMask.hidden = false;
     dom.contextSheet.classList.add("is-open");
     dom.contextSheet.setAttribute("aria-hidden", "false");
+    
+    // 检查当前会话是否有 pageContent，如果没有则尝试从后端获取
+    const s = findSessionById(sessionId);
+    if (!s || !s.pageContent || String(s.pageContent).trim() === "") {
+      // 显示加载状态
+      if (dom.contextContent) {
+        dom.contextContent.innerHTML = `
+          <div class="contextSection">
+            <div class="contextValue">正在加载页面上下文...</div>
+          </div>
+        `;
+      }
+      // 尝试从后端获取最新的会话详情
+      await fetchSessionDetail(sessionId);
+    }
+    
+    // 渲染上下文内容
     renderContextSheet();
   };
 
@@ -1510,40 +1535,40 @@
         return null;
       }
       
+      const s = findSessionById(sessionId);
+      if (!s) return sessionData;
+      
       // 如果返回了 messages 字段，更新到会话中
-      if (Array.isArray(sessionData.messages) && sessionData.messages.length > 0) {
-        const s = findSessionById(sessionId);
-        if (s) {
-          // 转换消息格式：type: "user" -> role: "user", type: "pet" -> role: "assistant"
-          s.messages = sessionData.messages.map((msg) => {
-            // 处理消息类型：user -> user, pet -> assistant
-            let role = "assistant";
-            if (msg.type === "user") {
-              role = "user";
-            } else if (msg.type === "pet" || msg.type === "assistant" || msg.type === "bot" || msg.type === "ai") {
-              role = "assistant";
-            } else if (msg.role) {
-              role = msg.role;
-            }
-            
-            return {
-              role: role,
-              content: msg.content || "",
-              ts: msg.timestamp || msg.ts || Date.now(),
-              imageDataUrl: msg.imageDataUrl || msg.image || undefined,
-            };
-          });
-          s.messageCount = s.messages.length;
+      if (Array.isArray(sessionData.messages)) {
+        // 转换消息格式：type: "user" -> role: "user", type: "pet" -> role: "assistant"
+        s.messages = sessionData.messages.map((msg) => {
+          // 处理消息类型：user -> user, pet -> assistant
+          let role = "assistant";
+          if (msg.type === "user") {
+            role = "user";
+          } else if (msg.type === "pet" || msg.type === "assistant" || msg.type === "bot" || msg.type === "ai") {
+            role = "assistant";
+          } else if (msg.role) {
+            role = msg.role;
+          }
           
-          // 如果接口返回了其他会话信息，也更新一下
-          if (sessionData.title) s.title = sessionData.title;
-          if (sessionData.pageTitle) s.pageTitle = sessionData.pageTitle;
-          if (sessionData.pageDescription) s.pageDescription = sessionData.pageDescription;
-          if (sessionData.preview) s.preview = sessionData.preview;
-          // 如果接口返回了页面上下文，更新到会话上
-          if (sessionData.pageContent) s.pageContent = sessionData.pageContent;
-        }
+          return {
+            role: role,
+            content: msg.content || "",
+            ts: msg.timestamp || msg.ts || Date.now(),
+            imageDataUrl: msg.imageDataUrl || msg.image || undefined,
+          };
+        });
+        s.messageCount = s.messages.length;
       }
+      
+      // 更新其他会话信息（无论是否有 messages）
+      if (sessionData.title) s.title = sessionData.title;
+      if (sessionData.pageTitle) s.pageTitle = sessionData.pageTitle;
+      if (sessionData.pageDescription) s.pageDescription = sessionData.pageDescription;
+      if (sessionData.preview) s.preview = sessionData.preview;
+      // 如果接口返回了页面上下文，更新到会话上（即使为空字符串也要更新，避免显示旧数据）
+      if (sessionData.pageContent !== undefined) s.pageContent = sessionData.pageContent || "";
       
       return sessionData;
     } catch (error) {
@@ -2115,9 +2140,31 @@
     renderNews();
   };
 
+  // ---------- Date picker presentation ----------
+  const DATE_EMPTY_LABEL = "全部日期";
+  const isValidYMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
+
+  // 原生 input[type="date"] 在为空时很多浏览器会强制显示 yyyy/mm/dd 之类的系统占位。
+  // 这里用“空值时切为 text + placeholder”的方式，实现“全部日期”的展示。
+  const syncDatePickerUI = () => {
+    if (!dom.datePicker) return;
+    const hasDate = !!state.selectedDate;
+    if (hasDate) {
+      if (dom.datePicker.type !== "date") dom.datePicker.type = "date";
+      dom.datePicker.placeholder = "";
+      dom.datePicker.value = state.selectedDate;
+    } else {
+      if (dom.datePicker.type !== "text") dom.datePicker.type = "text";
+      dom.datePicker.value = "";
+      dom.datePicker.placeholder = DATE_EMPTY_LABEL;
+      // 避免某些输入法弹键盘（点击会触发打开日期选择器）
+      dom.datePicker.setAttribute("inputmode", "none");
+    }
+  };
+
   const setSelectedDate = (ymd, { syncPicker = true, render = true } = {}) => {
-    state.selectedDate = ymd || "";
-    if (syncPicker) dom.datePicker.value = state.selectedDate;
+    state.selectedDate = isValidYMD(ymd) ? ymd : "";
+    if (syncPicker) syncDatePickerUI();
     if (!render) return;
 
     // 按当前底部 tab 做一致的联动：
@@ -2317,7 +2364,15 @@
 
   const wire = () => {
     // date picker
-    const openNativeDatePicker = () => {
+    const ensureDateType = () => {
+      if (dom.datePicker.type !== "date") dom.datePicker.type = "date";
+      // type 切换可能重置 value，这里按状态再同步一次
+      dom.datePicker.value = state.selectedDate || "";
+    };
+
+    const openNativeDatePicker = ({ fromInputClick = false } = {}) => {
+      const wasNotDate = dom.datePicker.type !== "date";
+      ensureDateType();
       // showPicker: Chrome/Edge 等支持；iOS/部分 WebView 可能没有
       if (typeof dom.datePicker.showPicker === "function") {
         dom.datePicker.showPicker();
@@ -2325,7 +2380,22 @@
       }
       dom.datePicker.focus();
       // 对于不支持 showPicker 的浏览器，尝试触发点击
-      dom.datePicker.click();
+      // 注意：如果本来就是 input 自己的 click 事件里触发，再 click() 可能递归
+      if (!fromInputClick) {
+        dom.datePicker.click();
+        return;
+      }
+      // 但如果是从 text 切换为 date 后的“首次点击”，默认行为未必会打开日期面板；
+      // 这里延迟触发一次 click，让浏览器按 date 类型走默认打开逻辑，同时避免递归。
+      if (wasNotDate) {
+        setTimeout(() => {
+          try {
+            dom.datePicker.click();
+          } catch {
+            // ignore
+          }
+        }, 0);
+      }
     };
 
     // 点到"日期区域"也能弹出（避免小屏被遮挡/点不到 input）
@@ -2337,15 +2407,15 @@
     });
     dom.datePicker.addEventListener("click", (e) => {
       e.stopPropagation();
-      openNativeDatePicker();
+      openNativeDatePicker({ fromInputClick: true });
     });
 
     // 同时监听 change 和 input 事件，确保兼容性
     const handleDateChange = () => {
-      const value = dom.datePicker.value;
+      const value = String(dom.datePicker.value || "").trim();
       // 允许清空日期（value 为空字符串时也更新状态）
       // 具体刷新逻辑交给 setSelectedDate 统一处理，避免入口分散导致交互不一致
-      setSelectedDate(value || "");
+      setSelectedDate(isValidYMD(value) ? value : "");
     };
     dom.datePicker.addEventListener("change", handleDateChange);
     dom.datePicker.addEventListener("input", handleDateChange);
@@ -2789,8 +2859,8 @@
     } catch {
       state.chatUi.foldExpanded = {};
     }
-    // 默认显示今天（并按今天过滤）；用户仍可手动清空日期来取消过滤
-    setSelectedDate(dateUtil.todayYMD(), { syncPicker: true, render: false });
+    // 默认显示全部会话（不设置日期过滤）
+    setSelectedDate("", { syncPicker: true, render: false });
     // 默认显示会话视图（不读取 localStorage，始终默认会话）
     state.bottomTab = "sessions";
     // 确保初始状态是列表页（不显示回退按钮）
@@ -2805,6 +2875,7 @@
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
