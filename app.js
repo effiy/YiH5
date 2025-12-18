@@ -1313,17 +1313,23 @@
   // 默认大模型：切换为 deepseek-r1:32b
   const DEFAULT_MODEL = "deepseek-r1:32b";
 
-  const buildPromptPayload = (systemPrompt, userPrompt, modelId = DEFAULT_MODEL) => {
-    const sys = String(systemPrompt || "").trim();
-    const usr = String(userPrompt || "").trim();
-    const messages = [];
-    if (sys) messages.push({ role: "system", content: sys });
-    if (usr) messages.push({ role: "user", content: usr });
-    return {
-      model: modelId,
-      messages,
-      stream: false,
+  // 构建 prompt 请求 payload（与 YiPet 保持一致）
+  // 目标结构：
+  // { fromSystem, fromUser, model, conversation_id }
+  const buildPromptPayload = (fromSystem, fromUser, modelId = DEFAULT_MODEL) => {
+    const sys = String(fromSystem || "").trim();
+    const usr = String(fromUser || "").trim();
+    const payload = {
+      fromSystem: sys,
+      fromUser: usr,
+      model: modelId || DEFAULT_MODEL,
     };
+
+    // 与 YiPet 一致：尽量携带会话 ID，便于后端做上下文/连续会话处理
+    const conversationId = String(state?.activeSessionId || "").trim();
+    if (conversationId) payload.conversation_id = conversationId;
+
+    return payload;
   };
 
   const callPromptOnce = async (systemPrompt, userPrompt) => {
@@ -1342,6 +1348,20 @@
     // 后端可能返回 JSON，也可能返回 SSE 文本，这里做兼容处理
     const text = await resp.text();
     if (!text) return "";
+
+    // 统一去除大模型的 think / 思考过程（参考 YiPet 的“只展示最终内容”的体验）
+    // 兼容常见格式：
+    // 1) <think> ... </think>
+    // 2) ```think ... ```
+    const stripThink = (raw) => {
+      let s = String(raw || "");
+      // <think>...</think>
+      s = s.replace(/<think>[\s\S]*?<\/think>/gi, "");
+      // ```think ... ```
+      s = s.replace(/```think[\s\S]*?```/gi, "");
+      return s.trim();
+    };
+
     // 优先尝试 JSON
     try {
       const obj = JSON.parse(text);
@@ -1350,7 +1370,7 @@
         obj?.data ||
         obj?.message?.content ||
         (Array.isArray(obj?.choices) ? obj.choices.map((c) => c.message?.content || c.delta?.content || "").join("") : "");
-      if (content) return String(content).trim();
+      if (content) return stripThink(content);
     } catch {
       // ignore, 可能是 SSE 或纯文本
     }
@@ -1374,10 +1394,56 @@
           accumulated += dataStr;
         }
       }
-      return accumulated.trim();
+      return stripThink(accumulated);
     }
 
     // 兜底：当作纯文本返回
+    return stripThink(text);
+  };
+
+  // 统一清洗大模型返回的优化文本（参考 YiPet，做轻量处理，保留 Markdown）
+  const cleanOptimizedText = (rawText) => {
+    let text = String(rawText || "").trim();
+    if (!text) return text;
+
+    // 去掉首尾可能的引号
+    const quotePairs = [
+      ['"', '"'],
+      ["'", "'"],
+      ["“", "”"],
+      ["‘", "’"],
+      ["「", "」"],
+      ["『", "』"],
+      ["《", "》"],
+    ];
+
+    for (const [startQuote, endQuote] of quotePairs) {
+      if (text.startsWith(startQuote) && text.endsWith(endQuote)) {
+        text = text.slice(startQuote.length, -endQuote.length).trim();
+        break;
+      }
+    }
+
+    // 去掉模型常见的前缀说明文案
+    const prefixes = [
+      "优化后：",
+      "优化后内容：",
+      "优化后描述：",
+      "优化后的内容：",
+      "优化后的描述：",
+      "以下是优化后的内容：",
+      "下面是优化后的内容：",
+      "以下是优化后的描述：",
+      "下面是优化后的描述：",
+    ];
+
+    for (const prefix of prefixes) {
+      if (text.startsWith(prefix)) {
+        text = text.slice(prefix.length).trim();
+        break;
+      }
+    }
+
     return text.trim();
   };
 
@@ -1438,17 +1504,28 @@
     const btn = document.querySelector('button[data-action="optimizePageContext"]');
 
     await withButtonLoading(btn, "优化中...", async () => {
-      let userPrompt = "请在尽量保持原有结构和 Markdown 格式的前提下，对下面的网页上下文进行语言优化，使其更通顺、重点更突出，适合作为 AI 的参考上下文：\n\n";
-      userPrompt += current.substring(0, 4000);
-      userPrompt += "\n\n请直接返回优化后的完整文本，不要添加任何额外说明。";
+      const systemPrompt = `你是一个专业的网页内容整理和文案优化专家，擅长：
+1. 在不改变核心含义的前提下，优化表达，让句子更简洁、自然、易读
+2. 合理调整段落结构，让重点更突出、层次更清晰
+3. 尽量保留原有的 Markdown 结构（标题、列表、代码块等）
+4. 避免主观评价和无关扩写，只做必要的润色和结构优化
 
-      const systemPrompt =
-        "你是一个擅长整理网页内容的助手，能够在不改变核心含义的前提下，优化文本表达，并尽量保留原有的 Markdown 结构。";
+请根据下面提供的网页上下文内容进行语言和结构优化。`;
+
+      const userPrompt = `请在尽量保持原有结构和 Markdown 格式的前提下，优化下面的网页上下文，使其更通顺、重点更突出，适合作为 AI 的参考上下文：
+
+${current.substring(0, 4000)}
+
+请直接返回优化后的完整文本，不要添加任何额外说明、前后缀标题或引号。`;
+
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      if (result) {
-        s.pageContent = result;
-        renderContextSheet();
+      const cleaned = cleanOptimizedText(result);
+      if (!cleaned || cleaned === current) {
+        window.alert("文本已经是最优状态，无需优化。");
+        return;
       }
+      s.pageContent = cleaned;
+      renderContextSheet();
     });
   };
 
@@ -1469,13 +1546,32 @@
     const langName = targetLanguage === "zh" ? "中文" : "英文";
 
     await withButtonLoading(btn, "翻译中...", async () => {
-      const systemPrompt = `你是一个专业的翻译助手，请在尽量保留原有 Markdown 结构的前提下，将以下网页上下文内容翻译成${langName}，保持原意和语气不变，语言自然流畅。请直接返回翻译后的完整文本，不要添加任何说明。`;
-      const userPrompt = `请将下面的网页上下文内容翻译成${langName}：\n\n${originalText}\n\n请直接返回翻译后的完整文本。`;
+      const systemPrompt = `你是一个专业的网页内容翻译助手，擅长：
+1. 在严格保留原文含义和关键信息的前提下进行中英文互译
+2. 尽量保留原有的 Markdown 结构（标题、列表、代码块等）
+3. 让译文表达自然流畅、易读，语气与原文一致
+4. 不添加任何解释性内容或额外段落
+
+请根据下面提供的网页上下文内容，将其精准翻译成${langName}。`;
+
+      const userPrompt = `请将下面的网页上下文内容翻译成${langName}，要求：
+1. 保留原有 Markdown 结构
+2. 保持原意和语气不变
+3. 不添加任何说明文字或额外内容
+
+原文：
+
+${originalText}
+
+请直接返回翻译后的完整文本，不要添加任何额外说明、前后缀标题或引号。`;
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      if (result) {
-        s.pageContent = result;
-        renderContextSheet();
+      const cleaned = cleanOptimizedText(result);
+      if (!cleaned || cleaned === originalText) {
+        window.alert("翻译结果与原文几乎没有差异，已保持原内容。");
+        return;
       }
+      s.pageContent = cleaned;
+      renderContextSheet();
     });
   };
 
@@ -1553,20 +1649,31 @@
     const btn = document.querySelector('button[data-action="optimizePageDescription"]');
 
     await withButtonLoading(btn, "优化中...", async () => {
-      let userPrompt =
-        "请在尽量保持原意的前提下，对下面的页面描述进行语言优化，使其更清晰、重点更突出，适合作为 AI 的参考描述：\n\n";
-      userPrompt += current.substring(0, 2000);
-      userPrompt += "\n\n请直接返回优化后的完整文本，不要添加任何额外说明。";
+      const systemPrompt = `你是一个专业的页面简介和文案优化专家，擅长：
+1. 提炼页面的核心要点，用简洁有力的语言表达
+2. 优化文本结构，使其逻辑清晰、层次分明
+3. 提升文案吸引力和可读性，但保持客观中立的语气
+4. 不改变原有关键信息，只做必要的润色和结构优化
 
-      const systemPrompt =
-        "你是一个擅长提炼和优化页面简介的助手，能够在不改变核心含义的前提下，让描述更准确、更易读。";
+请根据页面上下文，对页面描述进行精准优化。`;
+
+      const userPrompt = `请在尽量保持原意的前提下，对下面的页面描述进行语言优化，使其更清晰、重点更突出，适合作为 AI 的参考描述：
+
+${current.substring(0, 2000)}
+
+请直接返回优化后的完整页面描述，不要添加任何额外说明、前后缀标题或引号。`;
+
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      if (result) {
-        s.pageDescription = result;
-        // 列表摘要优先使用 pageDescription，这里同步一下体验更一致
-        s.preview = result;
-        renderPageDescSheet();
+      const cleaned = cleanOptimizedText(result);
+      if (!cleaned || cleaned === current) {
+        window.alert("文本已经是最优状态，无需优化。");
+        return;
       }
+
+      s.pageDescription = cleaned;
+      // 列表摘要优先使用 pageDescription，这里同步一下体验更一致
+      s.preview = cleaned;
+      renderPageDescSheet();
     });
   };
 
@@ -1587,14 +1694,34 @@
     const langName = targetLanguage === "zh" ? "中文" : "英文";
 
     await withButtonLoading(btn, "翻译中...", async () => {
-      const systemPrompt = `你是一个专业的翻译助手，请将以下页面描述翻译成${langName}，保持原意和语气不变，语言自然流畅。请直接返回翻译后的完整文本，不要添加任何说明。`;
-      const userPrompt = `请将下面的页面描述翻译成${langName}：\n\n${originalText}\n\n请直接返回翻译后的完整文本。`;
+      const systemPrompt = `你是一个专业的页面描述翻译助手，擅长：
+1. 在严格保留原文关键信息和核心含义的前提下进行中英文互译
+2. 让译文简介清晰、自然流畅，适合作为页面摘要或说明
+3. 保持客观中立的语气，不添加主观评价
+4. 不添加任何解释性内容或额外段落
+
+请根据下面提供的页面描述，将其精准翻译成${langName}。`;
+
+      const userPrompt = `请将下面的页面描述翻译成${langName}，要求：
+1. 保持原意和语气不变
+2. 表达自然流畅，适合作为页面简介
+3. 不添加任何说明文字或额外内容
+
+原文：
+
+${originalText}
+
+请直接返回翻译后的完整页面描述，不要添加任何额外说明、前后缀标题或引号。`;
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      if (result) {
-        s.pageDescription = result;
-        s.preview = result;
-        renderPageDescSheet();
+      const cleaned = cleanOptimizedText(result);
+      if (!cleaned || cleaned === originalText) {
+        window.alert("翻译结果与原文几乎没有差异，已保持原内容。");
+        return;
       }
+
+      s.pageDescription = cleaned;
+      s.preview = cleaned;
+      renderPageDescSheet();
     });
   };
 
