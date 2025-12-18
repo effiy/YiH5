@@ -1310,7 +1310,8 @@
 
   // 统一的 Prompt 调用封装（参考 YiPet）
   const PROMPT_API_URL = "https://api.effiy.cn/prompt/";
-  const DEFAULT_MODEL = "qwen3";
+  // 默认大模型：切换为 deepseek-r1:32b
+  const DEFAULT_MODEL = "deepseek-r1:32b";
 
   const buildPromptPayload = (systemPrompt, userPrompt, modelId = DEFAULT_MODEL) => {
     const sys = String(systemPrompt || "").trim();
@@ -2308,7 +2309,9 @@
   const renderItem = (s) => {
     const badges = [
       s.muted ? `<span class="badge">免打扰</span>` : "",
-      s.messageCount > 0 ? `<span class="badge">消息 ${escapeHtml(String(s.messageCount))}</span>` : `<span class="badge">暂无消息</span>`,
+      s.messageCount > 0
+        ? `<span class="badge">消息 ${escapeHtml(String(s.messageCount))}</span>`
+        : `<span class="badge">暂无消息</span>`,
     ].join("");
 
     const mutedCls = s.muted ? " is-muted" : "";
@@ -2316,7 +2319,18 @@
     const displayTitle = (s.pageTitle && s.pageTitle.trim()) || s.title || "未命名会话";
     // 优先显示 pageDescription，如果没有则显示 preview
     const displayDesc = (s.pageDescription && s.pageDescription.trim()) || s.preview || "—";
-    
+    // 会话标签渲染：参考新闻列表的标签样式，但使用不同颜色
+    const rawTags = Array.isArray(s.tags) ? s.tags : s.tags ? [s.tags] : [];
+    const normTags = rawTags.map((t) => String(t || "").trim()).filter(Boolean);
+    const displayTags = normTags.length ? normTags : ["无标签"];
+    const tagBadges = displayTags
+      .slice(0, 4)
+      .map((t, idx) => {
+        const colorCls = `is-sessionTag-${idx % 4}`;
+        return `<span class="badge ${colorCls}">${escapeHtml(t)}</span>`;
+      })
+      .join("");
+
     return `
       <article class="item${mutedCls}" data-id="${s.id}">
         <div class="item__mid">
@@ -2330,7 +2344,7 @@
             <div class="item__preview">${escapeHtml(displayDesc)}</div>
           </div>
           <div class="item__row2" style="margin-top:6px">
-            <div class="item__preview">${escapeHtml((s.tags && s.tags.length ? s.tags : ["无"]).join(" / "))}</div>
+            <div class="item__tags">${tagBadges}</div>
             <div class="item__meta">${badges}</div>
           </div>
         </div>
