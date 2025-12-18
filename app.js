@@ -2,6 +2,45 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  // ---------- visualViewport: 让底部 fixed 组件始终贴合“可视窗口底部” ----------
+  // 背景：iOS Safari / 部分 WebView 在地址栏/底部工具栏伸缩或键盘弹出时，
+  // layout viewport 与 visual viewport 会出现差值，导致 bottom:0 的 fixed 元素“悬空/被遮挡”。
+  const setupVisualViewportBottomInset = () => {
+    const docEl = document.documentElement;
+    if (!docEl) return;
+    const vv = window.visualViewport;
+
+    let raf = 0;
+    const update = () => {
+      const layoutH = docEl.clientHeight || 0;
+      let insetBottom = 0;
+
+      if (vv && Number.isFinite(vv.height) && Number.isFinite(vv.offsetTop)) {
+        // layout viewport 底部 - visual viewport 底部（考虑 offsetTop）
+        insetBottom = Math.max(0, layoutH - vv.height - vv.offsetTop);
+      }
+
+      // 写入 CSS 变量供 styles.css 使用
+      docEl.style.setProperty("--vv-bottom", `${Math.round(insetBottom)}px`);
+    };
+
+    const schedule = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        update();
+      });
+    };
+
+    update();
+    if (vv) {
+      vv.addEventListener("resize", schedule, { passive: true });
+      vv.addEventListener("scroll", schedule, { passive: true });
+    }
+    window.addEventListener("resize", schedule, { passive: true });
+    window.addEventListener("orientationchange", schedule, { passive: true });
+  };
+
   // ---------- Markdown / Mermaid ----------
   const initMermaidOnce = () => {
     if (typeof window.mermaid === "undefined") return false;
@@ -181,6 +220,12 @@
       error: "",
       loadedAt: 0,
     },
+    changelog: {
+      manifest: null, // { current, generatedAt, releases }
+      loading: false,
+      error: "",
+      loadedAt: 0,
+    },
     filterDraft: {
       selectedTags: [], // 选中的标签数组
     },
@@ -307,22 +352,99 @@
   // - 若版本变化，则把当前 URL 改成 ?v=<version> 并 reload
   // - index.html 会把 v 参数拼到 styles.css/app.js 上，实现强制更新
   // - libs/ 下资源不参与强刷；鉴权 token（openAuth/localStorage）不会被清除
+  const pickVersionFromObject = (obj) => {
+    // 与旧逻辑保持兼容：优先使用 v/version，其次才是 current
+    const direct = [obj?.v, obj?.version, obj?.current].map((x) => String(x || "").trim()).filter(Boolean);
+    if (direct.length) return direct[0];
+
+    const rels = Array.isArray(obj?.releases) ? obj.releases : Array.isArray(obj?.history) ? obj.history : [];
+    if (Array.isArray(rels) && rels.length) {
+      for (const r of rels) {
+        const vv = String(r?.version || r?.v || r?.tag || "").trim();
+        if (vv) return vv;
+      }
+    }
+    return "";
+  };
+
   const parseVersionFromResponse = async (resp) => {
     const ct = String(resp.headers.get("content-type") || "").toLowerCase();
     if (ct.includes("application/json")) {
       const obj = await resp.json().catch(() => null);
-      const v = String(obj?.v || obj?.version || "").trim();
-      return v;
+      return pickVersionFromObject(obj);
     }
     const text = await resp.text().catch(() => "");
     try {
       const obj = JSON.parse(text);
-      const v = String(obj?.v || obj?.version || "").trim();
+      const v = pickVersionFromObject(obj);
       if (v) return v;
     } catch {
       // ignore
     }
     return String(text || "").trim();
+  };
+
+  const normalizeVersionManifest = (raw) => {
+    const obj = raw && typeof raw === "object" ? raw : {};
+    const current = pickVersionFromObject(obj);
+    const generatedAt = String(obj.generatedAt || obj.updatedAt || obj.buildTime || "").trim();
+    let releases = Array.isArray(obj.releases)
+      ? obj.releases
+      : Array.isArray(obj.history)
+        ? obj.history
+        : [];
+
+    releases = (Array.isArray(releases) ? releases : [])
+      .map((r) => {
+        const version = String(r?.version || r?.v || r?.tag || "").trim();
+        const date = String(r?.date || r?.time || r?.publishedAt || "").trim();
+        const title = String(r?.title || r?.name || "").trim();
+        const notes = String(r?.notes || r?.note || r?.body || "").trim();
+        const changesRaw = Array.isArray(r?.changes) ? r.changes : Array.isArray(r?.items) ? r.items : [];
+        const changes = (Array.isArray(changesRaw) ? changesRaw : [])
+          .map((c) => {
+            if (typeof c === "string") return { type: "变更", text: c };
+            const type = String(c?.type || c?.kind || "变更").trim() || "变更";
+            const text = String(c?.text || c?.content || c?.desc || "").trim();
+            return text ? { type, text } : null;
+          })
+          .filter(Boolean);
+        return version ? { version, date, title, notes, changes } : null;
+      })
+      .filter(Boolean);
+
+    // 兜底：只有 current 但没有 releases，也能展示一条记录
+    if (current && releases.length === 0) {
+      releases = [{ version: current, date: "", title: "发布记录", notes: "", changes: [] }];
+    }
+
+    // 兜底：current 不在 releases 第一条时，补一条到最前（方便用户看到“当前版本”）
+    if (current && releases.length) {
+      const has = releases.some((r) => String(r.version) === String(current));
+      if (!has) releases.unshift({ version: current, date: "", title: "当前版本", notes: "", changes: [] });
+    }
+
+    return { current, generatedAt, releases };
+  };
+
+  const fetchVersionManifest = async () => {
+    // file:// 或某些 WebView 环境可能无法 fetch，本功能自动降级
+    if (!location || !location.protocol || !location.protocol.startsWith("http")) {
+      return normalizeVersionManifest({ v: getStoredAppVersion() || "" });
+    }
+    const resp = await fetch(APP_VERSION_URL, { cache: "no-store" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const ct = String(resp.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("application/json")) {
+      const obj = await resp.json().catch(() => null);
+      return normalizeVersionManifest(obj);
+    }
+    const text = await resp.text().catch(() => "");
+    try {
+      return normalizeVersionManifest(JSON.parse(text));
+    } catch {
+      return normalizeVersionManifest({ v: String(text || "").trim() });
+    }
   };
 
   const getStoredAppVersion = () => {
@@ -521,10 +643,16 @@
     chatInput: $("#chatInput"),
     faqBtn: $("#faqBtn"),
     openUrlBtn: $("#openUrlBtn"),
+    changelogBtn: $("#changelogBtn"),
     faqSheetMask: $("#faqSheetMask"),
     faqSheet: $("#faqSheet"),
     faqList: $("#faqList"),
     faqEmpty: $("#faqEmpty"),
+    changelogSheetMask: $("#changelogSheetMask"),
+    changelogSheet: $("#changelogSheet"),
+    changelogMeta: $("#changelogMeta"),
+    changelogList: $("#changelogList"),
+    changelogEmpty: $("#changelogEmpty"),
     contextSheetMask: $("#contextSheetMask"),
     contextSheet: $("#contextSheet"),
     contextContent: $("#contextContent"),
@@ -1542,6 +1670,122 @@
     await fetchFaqs();
   };
 
+  // ---------- Changelog / Version history ----------
+  const renderChangelogSheet = () => {
+    if (!dom.changelogList || !dom.changelogMeta || !dom.changelogEmpty) return;
+    const loading = !!state.changelog.loading;
+    const err = String(state.changelog.error || "").trim();
+    const m = state.changelog.manifest;
+    const current = String(m?.current || getStoredAppVersion() || "").trim();
+    const generatedAt = String(m?.generatedAt || "").trim();
+
+    dom.changelogMeta.innerHTML = `
+      <div class="changelogMeta__row">
+        <span class="changelogMeta__k">当前版本</span>
+        <span class="changelogMeta__v">${current ? escapeHtml(current) : "—"}</span>
+      </div>
+      ${generatedAt ? `<div class="changelogMeta__row"><span class="changelogMeta__k">构建时间</span><span class="changelogMeta__v">${escapeHtml(generatedAt)}</span></div>` : ""}
+      <div class="changelogMeta__row">
+        <span class="changelogMeta__k">${loading ? "状态" : err ? "状态" : "操作"}</span>
+        <span class="changelogMeta__v">
+          ${
+            loading
+              ? "加载中…"
+              : err
+                ? `<span style="color:var(--danger);font-weight:700">${escapeHtml(err)}</span>`
+                : `<button type="button" class="topbar__link" style="padding:6px 8px" data-action="refreshChangelog">刷新</button>`
+          }
+        </span>
+      </div>
+    `;
+
+    const releases = Array.isArray(m?.releases) ? m.releases : [];
+    if (!releases.length) {
+      dom.changelogList.innerHTML = "";
+      dom.changelogEmpty.hidden = false;
+      return;
+    }
+    dom.changelogEmpty.hidden = true;
+
+    dom.changelogList.innerHTML = releases
+      .map((r) => {
+        const ver = escapeHtml(String(r.version || "").trim());
+        const date = escapeHtml(String(r.date || "").trim());
+        const title = String(r.title || "").trim();
+        const changes = Array.isArray(r.changes) ? r.changes : [];
+        const notes = String(r.notes || "").trim();
+        const changesHtml = changes.length
+          ? `<ul class="release__changes">
+              ${changes
+                .map((c) => {
+                  const t = escapeHtml(String(c.type || "变更"));
+                  const txt = escapeHtml(String(c.text || ""));
+                  if (!txt) return "";
+                  return `<li class="release__change"><span class="release__tag">${t}</span><span class="release__text">${txt}</span></li>`;
+                })
+                .join("")}
+            </ul>`
+          : "";
+        const notesHtml = notes ? `<div class="release__notes chatBubble--md">${renderMarkdown(notes)}</div>` : "";
+
+        return `
+          <article class="release">
+            <div class="release__head">
+              <div class="release__ver">v${ver}</div>
+              <div class="release__date">${date || ""}</div>
+            </div>
+            ${title ? `<div class="release__title">${escapeHtml(title)}</div>` : ""}
+            ${changesHtml}
+            ${notesHtml}
+          </article>
+        `;
+      })
+      .join("");
+
+    // 支持 notes 中的 Mermaid
+    renderMermaidIn(dom.changelogList);
+  };
+
+  const refreshChangelog = async ({ force = false } = {}) => {
+    if (state.changelog.loading) return;
+    if (!force && state.changelog.manifest && Date.now() - (state.changelog.loadedAt || 0) < 30 * 1000) {
+      renderChangelogSheet();
+      return;
+    }
+    state.changelog.loading = true;
+    state.changelog.error = "";
+    renderChangelogSheet();
+    try {
+      const m = await fetchVersionManifest();
+      state.changelog.manifest = m;
+      state.changelog.loadedAt = Date.now();
+    } catch (e) {
+      state.changelog.error = "加载失败，请稍后重试。";
+      console.warn("[YiH5] 更新日志加载失败：", e);
+    } finally {
+      state.changelog.loading = false;
+      renderChangelogSheet();
+    }
+  };
+
+  const openChangelog = async () => {
+    if (!dom.changelogSheet || !dom.changelogSheetMask) return;
+    dom.changelogSheetMask.hidden = false;
+    dom.changelogSheet.classList.add("is-open");
+    dom.changelogSheet.setAttribute("aria-hidden", "false");
+    renderChangelogSheet();
+    await refreshChangelog({ force: true });
+  };
+
+  const closeChangelog = () => {
+    if (!dom.changelogSheet || !dom.changelogSheetMask) return;
+    dom.changelogSheet.classList.remove("is-open");
+    dom.changelogSheet.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => {
+      if (!dom.changelogSheet.classList.contains("is-open")) dom.changelogSheetMask.hidden = true;
+    }, 220);
+  };
+
   const openUrl = () => {
     const s = findSessionById(state.activeSessionId);
     if (!s) {
@@ -2538,6 +2782,11 @@
     const btn = document.getElementById("refreshBtn");
     btn?.classList.add("is-spinning");
     try {
+      // 更新日志弹层打开时：刷新更新日志
+      if (dom.changelogSheet?.classList.contains("is-open")) {
+        await refreshChangelog({ force: true });
+        return;
+      }
       // 优先：FAQ 弹层打开时刷新 FAQ
       if (dom.faqSheet?.classList.contains("is-open")) {
         await refreshFaq();
@@ -2606,15 +2855,18 @@
     }
     if (action === "resetFilter") return resetFilter();
     if (action === "openFaq") return openFaq();
+    if (action === "openChangelog") return openChangelog();
     if (action === "openUrl") return openUrl();
     if (action === "openContext") return openContext();
     if (action === "openPageDescription") return openPageDescription();
     if (action === "openAuth") return openAuth();
     if (action === "closeFaq") return closeFaq();
+    if (action === "closeChangelog") return closeChangelog();
     if (action === "closeContext") return closeContext();
     if (action === "closePageDescription") return closePageDescription();
     if (action === "manualRefresh") return manualRefresh();
     if (action === "refreshFaq") return refreshFaq();
+    if (action === "refreshChangelog") return refreshChangelog({ force: true });
     if (action === "refreshSessions") return refreshSessions();
     if (action === "insertFaq") {
       const t = el.dataset.faqText;
@@ -2824,11 +3076,12 @@
     // masks
     dom.sheetMask.addEventListener("click", closeFilter);
     dom.faqSheetMask?.addEventListener("click", closeFaq);
+    dom.changelogSheetMask?.addEventListener("click", closeChangelog);
     dom.contextSheetMask?.addEventListener("click", closeContext);
     dom.pageDescSheetMask?.addEventListener("click", closePageDescription);
 
     // mobile: prevent overscroll glow inside sheets
-    ["sheet", "faqSheet", "contextSheet", "pageDescSheet"].forEach((k) => {
+    ["sheet", "faqSheet", "changelogSheet", "contextSheet", "pageDescSheet"].forEach((k) => {
       const el = dom[k];
       el?.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
     });
@@ -3172,6 +3425,7 @@
     // 部署后自动更新（不影响 libs/，也不会清掉 openAuth 的 token）
     // 若触发了 location.replace，这里后续逻辑不会继续执行
     await checkDeployVersionAndReloadIfNeeded();
+    setupVisualViewportBottomInset();
     // 恢复折叠展开状态（跨会话/返回仍保留）
     try {
       state.chatUi.foldExpanded = loadChatFoldState();
@@ -3194,6 +3448,7 @@
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 

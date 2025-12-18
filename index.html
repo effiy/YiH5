@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1"
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <title></title>
+    <title>YiH5</title>
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
     <script>
       // 仅对本站资源做 cache-bust：styles.css / app.js
@@ -376,6 +376,21 @@
         </div>
       </section>
 
+      <!-- 更新日志弹层 -->
+      <div class="sheetMask" id="changelogSheetMask" hidden></div>
+      <section class="sheet" id="changelogSheet" aria-hidden="true">
+        <div class="sheet__header">
+          <button class="topbar__link" type="button" data-action="closeChangelog">关闭</button>
+          <div class="sheet__title">更新日志</div>
+          <span style="width:44px;display:inline-block" aria-hidden="true"></span>
+        </div>
+        <div class="sheet__body">
+          <div class="changelogMeta" id="changelogMeta"></div>
+          <div class="changelogList" id="changelogList"></div>
+          <div class="changelogEmpty" id="changelogEmpty" hidden>暂无更新日志</div>
+        </div>
+      </section>
+
       <!-- 底部导航：会话 / 新闻 -->
       <nav class="bottomNav" id="bottomNav" aria-label="底部导航">
         <button
@@ -425,6 +440,7 @@
     </script>
   </body>
 </html>
+
 
 
 
