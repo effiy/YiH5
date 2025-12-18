@@ -311,7 +311,8 @@
   };
 
   const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
-  const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss";
+  // 新闻列表不需要全文 content，显式排除以减少返回体/提升加载速度
+  const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss&excludeFields=content";
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
   const APP_VERSION_KEY = "YiH5.appVersion.v1";
   const APP_VERSION_URL = "./version.json";
