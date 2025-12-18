@@ -10,7 +10,25 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title></title>
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
-    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      // 仅对本站资源做 cache-bust：styles.css / app.js
+      // libs/ 下的第三方库保持原样（不强刷）
+      (function () {
+        try {
+          var v = new URLSearchParams(location.search).get("v");
+          var qs = v ? "?v=" + encodeURIComponent(v) : "";
+          var link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = "./styles.css" + qs;
+          document.head.appendChild(link);
+        } catch (e) {
+          var link2 = document.createElement("link");
+          link2.rel = "stylesheet";
+          link2.href = "./styles.css";
+          document.head.appendChild(link2);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div class="app" id="app">
@@ -387,9 +405,27 @@
     <!-- Markdown + Mermaid（用于聊天内容渲染） -->
     <script src="./libs/marked.min.js"></script>
     <script src="./libs/mermaid.min.js"></script>
-    <script src="./app.js"></script>
+    <script>
+      // app.js 同 styles.css：按 URL 参数 v 进行 cache-bust；libs 保持不变
+      (function () {
+        try {
+          var v = new URLSearchParams(location.search).get("v");
+          var qs = v ? "?v=" + encodeURIComponent(v) : "";
+          var s = document.createElement("script");
+          s.src = "./app.js" + qs;
+          s.defer = true;
+          document.body.appendChild(s);
+        } catch (e) {
+          var s2 = document.createElement("script");
+          s2.src = "./app.js";
+          s2.defer = true;
+          document.body.appendChild(s2);
+        }
+      })();
+    </script>
   </body>
 </html>
+
 
 
 

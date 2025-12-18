@@ -29,6 +29,49 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
 
+  const isSafeUrl = (href) => {
+    const s = String(href || "").trim();
+    if (!s) return false;
+    // 允许：http(s) / data:（常见为 data:image/...）
+    if (s.startsWith("http://") || s.startsWith("https://")) return true;
+    if (s.startsWith("data:")) return true;
+    return false;
+  };
+
+  let markedConfigured = false;
+  const ensureMarkedConfigured = () => {
+    if (markedConfigured) return;
+    if (typeof window.marked === "undefined" || typeof window.marked.parse !== "function") return;
+    try {
+      const renderer = new window.marked.Renderer();
+      // 给 Markdown 图片加懒加载与异步解码，显著改善长内容滚动卡顿（尤其 iOS WebView）
+      renderer.image = (href, title, text) => {
+        const src = isSafeUrl(href) ? String(href || "").trim() : "";
+        const alt = escapeHtml(text || "");
+        const t = title ? ` title="${escapeHtml(title)}"` : "";
+        if (!src) return alt ? `<span>${alt}</span>` : "";
+        return `<img src="${escapeHtml(src)}" alt="${alt}" loading="lazy" decoding="async" fetchpriority="low"${t} />`;
+      };
+      // 外链默认新开，避免在 H5 内“跳走”
+      renderer.link = (href, title, text) => {
+        const url = isSafeUrl(href) ? String(href || "").trim() : "";
+        const label = text || href || "";
+        const t = title ? ` title="${escapeHtml(title)}"` : "";
+        if (!url) return `<span>${escapeHtml(label)}</span>`;
+        return `<a href="${escapeHtml(url)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
+      };
+
+      window.marked.setOptions({
+        breaks: true,
+        gfm: true,
+        renderer,
+      });
+      markedConfigured = true;
+    } catch (e) {
+      console.warn("[YiH5] marked 配置失败：", e);
+    }
+  };
+
   const renderMarkdown = (text) => {
     const raw = String(text ?? "").trim();
     if (!raw) return "";
@@ -36,10 +79,7 @@
     // 有 marked 就用（和插件端一致：允许基础 HTML / code fence）
     if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
       try {
-        window.marked.setOptions({
-          breaks: true,
-          gfm: true,
-        });
+        ensureMarkedConfigured();
         return window.marked.parse(raw);
       } catch (e) {
         console.warn("[YiH5] Markdown 渲染失败，回退纯文本：", e);
@@ -228,6 +268,8 @@
   const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
   const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss";
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
+  const APP_VERSION_KEY = "YiH5.appVersion.v1";
+  const APP_VERSION_URL = "./version.json";
 
   const getAuthHeaders = () => {
     const token = String(state.auth.token || "").trim();
@@ -257,6 +299,100 @@
     // 配置完立即尝试刷新
     if (state.bottomTab === "news") fetchNews({ force: true });
     if (state.view === "chat") fetchFaqs({ force: true });
+  };
+
+  // ---------- Auto cache-bust on deploy ----------
+  // 机制：
+  // - 服务器每次部署更新根目录 version.json（cache: no-store 拉取）
+  // - 若版本变化，则把当前 URL 改成 ?v=<version> 并 reload
+  // - index.html 会把 v 参数拼到 styles.css/app.js 上，实现强制更新
+  // - libs/ 下资源不参与强刷；鉴权 token（openAuth/localStorage）不会被清除
+  const parseVersionFromResponse = async (resp) => {
+    const ct = String(resp.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("application/json")) {
+      const obj = await resp.json().catch(() => null);
+      const v = String(obj?.v || obj?.version || "").trim();
+      return v;
+    }
+    const text = await resp.text().catch(() => "");
+    try {
+      const obj = JSON.parse(text);
+      const v = String(obj?.v || obj?.version || "").trim();
+      if (v) return v;
+    } catch {
+      // ignore
+    }
+    return String(text || "").trim();
+  };
+
+  const getStoredAppVersion = () => {
+    try {
+      return String(localStorage.getItem(APP_VERSION_KEY) || "").trim();
+    } catch {
+      return "";
+    }
+  };
+
+  const setStoredAppVersion = (v) => {
+    try {
+      localStorage.setItem(APP_VERSION_KEY, String(v || "").trim());
+    } catch {
+      // ignore
+    }
+  };
+
+  const ensureUrlHasVersion = (serverV) => {
+    try {
+      const url = new URL(location.href);
+      const cur = url.searchParams.get("v") || "";
+      if (String(cur) === String(serverV)) return false;
+      url.searchParams.set("v", String(serverV));
+      // 保留 hash（路由）不变
+      location.replace(url.toString());
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const checkDeployVersionAndReloadIfNeeded = async () => {
+    // file:// 或某些 WebView 环境可能无法 fetch，本功能自动降级为“不强刷”
+    if (!location || !location.protocol || !location.protocol.startsWith("http")) return false;
+    try {
+      const resp = await fetch(APP_VERSION_URL, { cache: "no-store" });
+      if (!resp.ok) return false;
+      const serverV = String(await parseVersionFromResponse(resp)).trim();
+      if (!serverV) return false;
+
+      const stored = getStoredAppVersion();
+      const urlV = (() => {
+        try {
+          return new URLSearchParams(location.search).get("v") || "";
+        } catch {
+          return "";
+        }
+      })();
+
+      // 第一次进入：记录版本但不强制刷新（避免首次加载多一次跳转）
+      if (!stored) {
+        setStoredAppVersion(serverV);
+        // 如果 URL 没带 v，补上有利于后续资源稳定命中该版本
+        if (!urlV) return ensureUrlHasVersion(serverV);
+        return false;
+      }
+
+      // 版本变化：强制换成新 v（触发加载新 styles/app）
+      if (stored !== serverV) {
+        setStoredAppVersion(serverV);
+        return ensureUrlHasVersion(serverV);
+      }
+
+      // 版本没变但 URL 没 v：补上（可减少“偶发旧缓存命中”）
+      if (!urlV) return ensureUrlHasVersion(serverV);
+      return false;
+    } catch {
+      return false;
+    }
   };
 
   // 标签排序（本地持久化）
@@ -459,6 +595,157 @@
     return { key, title, link, description, sourceName, createdTime, published, tags };
   };
 
+  // 统一渲染新闻条目（便于虚拟列表复用）
+  const renderNewsItem = (n) => {
+    const tagBadges = (n.tags || [])
+      .slice(0, 3)
+      .map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`)
+      .join("");
+    const meta = n.createdTime || n.published || "";
+    const linkPart = n.link
+      ? `<a class="newsTitleLink" href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.title)}</a>`
+      : `<span class="newsTitleLink">${escapeHtml(n.title)}</span>`;
+    return `
+      <article class="newsItem">
+        <div class="newsItem__title">${linkPart}</div>
+        ${n.description ? `<div class="newsItem__desc">${escapeHtml(n.description)}</div>` : ""}
+        <div class="newsItem__meta">
+          <span class="newsItem__metaText">${escapeHtml(meta || "")}</span>
+          <span class="newsItem__tags">${tagBadges}</span>
+        </div>
+      </article>
+    `;
+  };
+
+  // ---------- 轻量虚拟列表（用于上下滑动性能优化；尤其 iOS 不支持 content-visibility 时效果明显） ----------
+  const VLIST_MIN_ITEMS = 60;
+  const vlist = {
+    sessions: {
+      enabled: false,
+      container: null,
+      items: [],
+      render: null,
+      itemHeight: 84, // 初始估计：与 contain-intrinsic-size 保持一致
+      overscan: 10,
+      start: -1,
+      end: -1,
+      raf: 0,
+      force: false,
+    },
+    news: {
+      enabled: false,
+      container: null,
+      items: [],
+      render: null,
+      itemHeight: 92, // 初始估计：与 contain-intrinsic-size 保持一致
+      overscan: 10,
+      start: -1,
+      end: -1,
+      raf: 0,
+      force: false,
+    },
+  };
+
+  const ensureVListDOM = (container) => {
+    if (!container) return null;
+    if (container.dataset.vlist !== "1") {
+      container.dataset.vlist = "1";
+      container.innerHTML = `
+        <div class="vlist__spacer vlist__spacer--top"></div>
+        <div class="vlist__items"></div>
+        <div class="vlist__spacer vlist__spacer--bottom"></div>
+      `;
+    }
+    return {
+      top: container.querySelector(".vlist__spacer--top"),
+      mid: container.querySelector(".vlist__items"),
+      bottom: container.querySelector(".vlist__spacer--bottom"),
+    };
+  };
+
+  const disableVList = (key) => {
+    const v = vlist[key];
+    if (!v) return;
+    v.enabled = false;
+    v.items = [];
+    v.render = null;
+    v.start = -1;
+    v.end = -1;
+    v.force = false;
+    if (v.raf) {
+      cancelAnimationFrame(v.raf);
+      v.raf = 0;
+    }
+    if (v.container) {
+      v.container.removeAttribute("data-vlist");
+    }
+  };
+
+  const requestVListUpdate = (key, { force = false } = {}) => {
+    const v = vlist[key];
+    if (!v || !v.enabled) return;
+    if (force) v.force = true;
+    if (v.raf) return;
+    v.raf = requestAnimationFrame(() => {
+      v.raf = 0;
+      renderVListSlice(key);
+    });
+  };
+
+  const renderVListSlice = (key) => {
+    const v = vlist[key];
+    if (!v || !v.enabled || !v.container || typeof v.render !== "function") return;
+    const container = v.container;
+    const items = Array.isArray(v.items) ? v.items : [];
+    const domParts = ensureVListDOM(container);
+    if (!domParts) return;
+
+    const { top, mid, bottom } = domParts;
+    if (!top || !mid || !bottom) return;
+
+    if (items.length === 0) {
+      top.style.height = "0px";
+      bottom.style.height = "0px";
+      mid.innerHTML = "";
+      v.start = 0;
+      v.end = 0;
+      v.force = false;
+      return;
+    }
+
+    const itemHeight = Math.max(40, Number(v.itemHeight) || 80);
+    const rect = container.getBoundingClientRect();
+    const listTop = rect.top + window.scrollY;
+    const viewportTop = window.scrollY;
+    const viewportBottom = viewportTop + window.innerHeight;
+
+    let start = Math.floor((viewportTop - listTop) / itemHeight) - v.overscan;
+    let end = Math.ceil((viewportBottom - listTop) / itemHeight) + v.overscan;
+    if (!Number.isFinite(start)) start = 0;
+    if (!Number.isFinite(end)) end = items.length;
+    start = Math.max(0, Math.min(items.length, start));
+    end = Math.max(start, Math.min(items.length, end));
+
+    if (!v.force && start === v.start && end === v.end) return;
+    v.force = false;
+    v.start = start;
+    v.end = end;
+
+    top.style.height = `${start * itemHeight}px`;
+    bottom.style.height = `${(items.length - end) * itemHeight}px`;
+    mid.innerHTML = items.slice(start, end).map(v.render).join("");
+
+    // 动态测高：避免估算不准导致的间隔跳动
+    requestAnimationFrame(() => {
+      const first = mid.firstElementChild;
+      const h = first && first.offsetHeight ? first.offsetHeight : 0;
+      if (h && h > 40 && h < 420 && Math.abs(h - v.itemHeight) > 2) {
+        v.itemHeight = h;
+        requestVListUpdate(key, { force: true });
+      }
+    });
+  };
+
   const getNewsIsoDateBySelectedDate = () => {
     const ymd = state.selectedDate || dateUtil.todayYMD();
     return `${ymd},${ymd}`;
@@ -594,6 +881,7 @@
     if (!dom.newsList || !dom.newsEmpty) return;
 
     if (state.news.loading) {
+      disableVList("news");
       dom.newsEmpty.hidden = false;
       dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("加载中…"));
       dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode("正在获取新闻列表"));
@@ -603,6 +891,7 @@
     }
 
     if (state.news.error) {
+      disableVList("news");
       dom.newsEmpty.hidden = false;
       dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("加载失败"));
       dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode(state.news.error));
@@ -618,25 +907,25 @@
     dom.newsEmpty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("暂无匹配新闻"));
     dom.newsEmpty.querySelector(".empty__desc")?.replaceChildren(document.createTextNode("试试清空搜索或调整筛选条件"));
 
-    dom.newsList.innerHTML = filteredItems
-      .map((n) => {
-        const tagBadges = (n.tags || []).slice(0, 3).map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`).join("");
-        const meta = n.createdTime || n.published || "";
-        const linkPart = n.link
-          ? `<a class="newsTitleLink" href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.title)}</a>`
-          : `<span class="newsTitleLink">${escapeHtml(n.title)}</span>`;
-        return `
-          <article class="newsItem">
-            <div class="newsItem__title">${linkPart}</div>
-            ${n.description ? `<div class="newsItem__desc">${escapeHtml(n.description)}</div>` : ""}
-            <div class="newsItem__meta">
-              <span class="newsItem__metaText">${escapeHtml(meta || "")}</span>
-              <span class="newsItem__tags">${tagBadges}</span>
-            </div>
-          </article>
-        `;
-      })
-      .join("");
+    // 长列表：启用虚拟列表减少 DOM 数量，滚动更顺滑（尤其 iOS/低端机）
+    if (filteredItems.length >= VLIST_MIN_ITEMS) {
+      const v = vlist.news;
+      v.enabled = true;
+      v.container = dom.newsList;
+      v.items = filteredItems;
+      v.render = renderNewsItem;
+      v.start = -1;
+      v.end = -1;
+      // 先同步出骨架，避免短暂显示旧内容
+      const parts = ensureVListDOM(v.container);
+      if (parts?.top) parts.top.style.height = "0px";
+      if (parts?.bottom) parts.bottom.style.height = "0px";
+      if (parts?.mid) parts.mid.innerHTML = "";
+      requestVListUpdate("news", { force: true });
+      return;
+    }
+    disableVList("news");
+    dom.newsList.innerHTML = filteredItems.map(renderNewsItem).join("");
   };
 
   const setBottomTab = async (tab, { persist = true } = {}) => {
@@ -1736,6 +2025,7 @@
 
   const renderList = () => {
     if (state.sessionsLoading) {
+      disableVList("sessions");
       renderChips();
       dom.empty.hidden = false;
       dom.empty.querySelector(".empty__title")?.replaceChildren(document.createTextNode("加载中…"));
@@ -1751,6 +2041,23 @@
     dom.empty.querySelector(".empty__desc")?.replaceChildren(
       document.createTextNode(state.lastError ? state.lastError : "试试清空搜索或调整筛选条件（也可清空日期过滤）"),
     );
+    if (arr.length >= VLIST_MIN_ITEMS) {
+      const v = vlist.sessions;
+      v.enabled = true;
+      v.container = dom.list;
+      v.items = arr;
+      v.render = renderItem;
+      v.start = -1;
+      v.end = -1;
+      // 先同步出骨架，避免短暂显示旧内容
+      const parts = ensureVListDOM(v.container);
+      if (parts?.top) parts.top.style.height = "0px";
+      if (parts?.bottom) parts.bottom.style.height = "0px";
+      if (parts?.mid) parts.mid.innerHTML = "";
+      requestVListUpdate("sessions", { force: true });
+      return;
+    }
+    disableVList("sessions");
     dom.list.innerHTML = arr.map(renderItem).join("");
   };
 
@@ -2525,6 +2832,15 @@
       const el = dom[k];
       el?.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
     });
+
+    // 全局滚动/尺寸变化：驱动虚拟列表刷新（passive 不阻塞滚动线程）
+    const onScrollOrResize = () => {
+      // 仅在对应页面可见时更新，减少无意义工作
+      if (state.bottomTab === "news") requestVListUpdate("news");
+      else if (state.view === "list") requestVListUpdate("sessions");
+    };
+    window.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize, { passive: true });
   };
 
   // ---------- Image preview ----------
@@ -2853,6 +3169,9 @@
 
   const init = async () => {
     loadAuthFromStorage();
+    // 部署后自动更新（不影响 libs/，也不会清掉 openAuth 的 token）
+    // 若触发了 location.replace，这里后续逻辑不会继续执行
+    await checkDeployVersionAndReloadIfNeeded();
     // 恢复折叠展开状态（跨会话/返回仍保留）
     try {
       state.chatUi.foldExpanded = loadChatFoldState();
@@ -2875,6 +3194,7 @@
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
