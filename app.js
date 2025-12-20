@@ -1641,8 +1641,6 @@ ${originalText}
           return;
         }
 
-        // 成功即可简单提示
-        window.alert("页面上下文已保存。");
         closeContext();
       } catch (e) {
         console.warn("[YiH5] 保存页面上下文到后端失败：", e);
