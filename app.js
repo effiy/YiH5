@@ -246,6 +246,7 @@
     sessions: [],
     sessionsLoading: false,
     bottomTab: "sessions", // sessions | news
+    chatSourceTab: null, // 记录进入聊天页面的来源标签页（sessions | news），用于返回时恢复
     news: {
       items: [],
       loading: false,
@@ -584,7 +585,7 @@
       
       state.lastError = "";
       // 映射为页面使用的统一结构（兼容你提供的接口字段）
-      state.sessions = sessions.map((s) => {
+      const mappedSessions = sessions.map((s) => {
         const tags = Array.isArray(s.tags) ? s.tags : (s.tags ? [s.tags] : []);
         const title = (s.title ?? s.pageTitle ?? "").trim() || "未命名会话";
         const preview = (s.pageDescription ?? s.preview ?? s.summary ?? "").trim();
@@ -604,7 +605,7 @@
           url: s.url || "",
           pageTitle: s.pageTitle || "",
           pageDescription: s.pageDescription || "",
-          // 如果后端返回了页面上下文字段，保留到会话对象上，供“页面上下文”使用
+          // 如果后端返回了页面上下文字段，保留到会话对象上，供"页面上下文"使用
           pageContent: s.pageContent || s.content || "",
           messageCount,
           messages,
@@ -616,6 +617,17 @@
           lastActiveAt,
         };
       });
+      
+      // 去重：根据会话ID去重，保留最新的会话（updatedAt最大的）
+      const sessionMap = new Map();
+      mappedSessions.forEach((session) => {
+        const existing = sessionMap.get(session.id);
+        if (!existing || session.updatedAt > existing.updatedAt) {
+          sessionMap.set(session.id, session);
+        }
+      });
+      
+      state.sessions = Array.from(sessionMap.values());
     } catch (error) {
       console.error("获取会话列表失败:", error);
       // 如果API请求失败，使用空数组，避免应用崩溃
@@ -736,7 +748,9 @@
     const published = String(n?.published ?? "").trim();
     const tags = Array.isArray(n?.tags) ? n.tags.map((t) => String(t || "").trim()).filter(Boolean) : [];
     const key = String(n?.key ?? n?._id ?? n?.id ?? link ?? title);
-    return { key, title, link, description, sourceName, createdTime, published, tags };
+    // 如果新闻已有 sessionId 字段，保留它；否则根据 link 查找对应的会话
+    const sessionId = n?.sessionId || null;
+    return { key, title, link, description, sourceName, createdTime, published, tags, sessionId };
   };
 
   // 统一渲染新闻条目（便于虚拟列表复用）
@@ -917,6 +931,23 @@
       const result = await resp.json();
       const list = extractNewsList(result);
       const items = Array.isArray(list) ? list.map(normalizeNewsItem) : [];
+      
+      // 加载会话列表，检查哪些新闻已经转换为会话
+      await fetchSessions();
+      
+      // 为每个新闻检查是否已有对应的会话
+      items.forEach(newsItem => {
+        if (newsItem.link) {
+          // 使用新闻的 link 作为会话ID查找对应的会话
+          const sessionId = newsItem.link;
+          const existingSession = findSessionById(sessionId);
+          if (existingSession) {
+            // 如果找到会话，设置 sessionId 字段
+            newsItem.sessionId = sessionId;
+          }
+        }
+      });
+      
       state.news.items = items;
       state.news.isoDate = isoDate;
       state.news.loadedAt = Date.now();
@@ -2113,8 +2144,12 @@ ${originalText}
         <path d="M14.7 6.7a1 1 0 0 1 0 1.4L10.8 12l3.9 3.9a1 1 0 1 1-1.4 1.4l-4.6-4.6a1 1 0 0 1 0-1.4l4.6-4.6a1 1 0 0 1 1.4 0Z"/>
       </svg>
     `;
-    btn.addEventListener("click", () => {
-      // 需求：返回到会话列表（避免退回到站点外部历史记录）
+    btn.addEventListener("click", async () => {
+      // 根据进入聊天页面的来源标签页，切换回对应的标签页
+      if (state.chatSourceTab && state.chatSourceTab !== state.bottomTab) {
+        await setBottomTab(state.chatSourceTab, { persist: false });
+      }
+      // 返回到列表（避免退回到站点外部历史记录）
       navigateToList();
     });
     chatBackBtnEl = btn;
@@ -3184,8 +3219,198 @@ ${originalText}
     location.hash = `#/chat?id=${encodeURIComponent(String(id))}`;
   };
 
-  const navigateToNewsChat = (key) => {
-    location.hash = `#/news-chat?key=${encodeURIComponent(String(key))}`;
+  const navigateToNewsChat = async (key) => {
+    // 记录进入聊天页面的来源标签页（从新闻视图进入）
+    state.chatSourceTab = "news";
+    
+    // 查找新闻
+    const news = findNewsByKey(key);
+    if (!news) {
+      console.warn("[YiH5] 找不到新闻，key:", key);
+      location.hash = `#/news-chat?key=${encodeURIComponent(String(key))}`;
+      return;
+    }
+
+    // 获取新闻的link作为会话ID（后端会自动将URL转换为MD5）
+    const newsLink = String(news.link || "").trim();
+    if (!newsLink) {
+      console.warn("[YiH5] 新闻没有link，无法创建会话");
+      location.hash = `#/news-chat?key=${encodeURIComponent(String(key))}`;
+      return;
+    }
+
+    // 使用新闻link作为会话ID（后端会自动处理URL到MD5的转换）
+    const sessionId = newsLink;
+
+    // 如果新闻已经有 sessionId 字段，说明已经转换为会话，直接进入会话聊天页面
+    if (news.sessionId) {
+      navigateToChat(news.sessionId);
+      return;
+    }
+
+    // 检查会话是否已存在
+    let existingSession = findSessionById(sessionId);
+    
+    // 如果本地没有找到，尝试从后端获取（确保会话列表已加载）
+    if (!existingSession) {
+      await fetchSessions();
+      existingSession = findSessionById(sessionId);
+    }
+
+    // 如果会话已存在，更新新闻的 sessionId 字段并进入会话聊天页面
+    if (existingSession) {
+      // 使用实际的会话ID（可能和原始sessionId不同，比如后端转换为MD5）
+      const actualSessionId = String(existingSession.id);
+      // 更新新闻的 sessionId 字段
+      news.sessionId = actualSessionId;
+      // 同时更新 state.news.items 中对应的新闻
+      const newsInState = state.news.items.find(n => String(n.key) === String(key));
+      if (newsInState) {
+        newsInState.sessionId = actualSessionId;
+      }
+      navigateToChat(actualSessionId);
+      return;
+    }
+
+    // 如果会话不存在，创建新会话
+    if (!existingSession) {
+      const newsDescription = String(news.description || "").trim();
+      const newsTitle = String(news.title || "").trim();
+      const now = Date.now();
+
+      // 创建新会话数据
+      const newSession = {
+        id: sessionId,
+        url: newsLink,
+        pageTitle: newsTitle || "新闻",
+        pageDescription: newsDescription,
+        pageContent: newsDescription, // 新闻描述也赋值给会话上下文字段
+        messages: [],
+        tags: Array.isArray(news.tags) ? news.tags : [],
+        createdAt: now,
+        updatedAt: now,
+        lastAccessTime: now,
+      };
+
+      // 保存会话到后端
+      try {
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(newSession),
+        });
+
+        if (resp.ok) {
+          const data = await resp.json().catch(() => null);
+          console.log("[YiH5] 新闻会话已创建并保存:", data);
+          
+          // 如果后端返回了会话数据，更新到本地状态
+          if (data && data.data && data.data.session) {
+            const savedSession = data.data.session;
+            // 使用后端返回的会话ID（可能和原始sessionId不同，比如后端转换为MD5）
+            const actualSessionId = String(savedSession.id || sessionId);
+            
+            // 检查会话是否已存在（避免重复添加）
+            let foundSession = findSessionById(actualSessionId);
+            if (!foundSession && actualSessionId !== String(sessionId)) {
+              foundSession = findSessionById(sessionId);
+            }
+            
+            if (foundSession) {
+              // 如果已存在，更新现有会话
+              existingSession = foundSession;
+              // 更新会话信息
+              if (savedSession.title) foundSession.title = savedSession.title;
+              if (savedSession.pageTitle) foundSession.pageTitle = savedSession.pageTitle;
+              if (savedSession.pageDescription) foundSession.pageDescription = savedSession.pageDescription;
+              if (Array.isArray(savedSession.messages)) {
+                foundSession.messages = savedSession.messages;
+                foundSession.messageCount = savedSession.messages.length;
+              }
+            } else {
+              // 映射为页面使用的统一结构
+              const mappedSession = {
+                id: actualSessionId,
+                title: (savedSession.title ?? savedSession.pageTitle ?? newsTitle).trim() || "未命名会话",
+                preview: (savedSession.pageDescription ?? savedSession.preview ?? newsDescription).trim(),
+                tags: Array.isArray(savedSession.tags) ? savedSession.tags : [],
+                url: savedSession.url || newsLink,
+                pageTitle: savedSession.pageTitle || newsTitle,
+                pageDescription: savedSession.pageDescription || newsDescription,
+                pageContent: savedSession.pageContent || newsDescription,
+                messageCount: Array.isArray(savedSession.messages) ? savedSession.messages.length : 0,
+                messages: Array.isArray(savedSession.messages) ? savedSession.messages : [],
+                createdAt: Number(savedSession.createdAt || now),
+                updatedAt: Number(savedSession.updatedAt || now),
+                lastAccessTime: Number(savedSession.lastAccessTime || now),
+                lastActiveAt: Number(savedSession.lastAccessTime || now),
+              };
+              
+              // 添加到本地会话列表
+              state.sessions.push(mappedSession);
+              existingSession = mappedSession;
+            }
+            
+            // 更新新闻的 sessionId 字段，使用后端返回的实际ID
+            news.sessionId = actualSessionId;
+            // 同时更新 state.news.items 中对应的新闻
+            const newsInState = state.news.items.find(n => String(n.key) === String(key));
+            if (newsInState) {
+              newsInState.sessionId = actualSessionId;
+            }
+          } else {
+            // 如果后端没有返回会话数据，检查是否已存在，避免重复添加
+            let foundSession = findSessionById(sessionId);
+            if (foundSession) {
+              existingSession = foundSession;
+            } else {
+              // 使用本地创建的数据
+              const newSession = {
+                id: sessionId,
+                title: newsTitle || "未命名会话",
+                preview: newsDescription,
+                tags: Array.isArray(news.tags) ? news.tags : [],
+                url: newsLink,
+                pageTitle: newsTitle,
+                pageDescription: newsDescription,
+                pageContent: newsDescription,
+                messageCount: 0,
+                messages: [],
+                createdAt: now,
+                updatedAt: now,
+                lastAccessTime: now,
+                lastActiveAt: now,
+              };
+              state.sessions.push(newSession);
+              existingSession = newSession;
+            }
+            
+            // 更新新闻的 sessionId 字段，标记已转换为会话
+            news.sessionId = sessionId;
+            // 同时更新 state.news.items 中对应的新闻
+            const newsInState = state.news.items.find(n => String(n.key) === String(key));
+            if (newsInState) {
+              newsInState.sessionId = sessionId;
+            }
+          }
+        } else {
+          console.warn("[YiH5] 保存新闻会话失败：HTTP", resp.status);
+        }
+      } catch (e) {
+        console.warn("[YiH5] 保存新闻会话失败：", e);
+      }
+    }
+
+    // 如果会话已存在或已创建，进入会话聊天页面
+    if (existingSession) {
+      navigateToChat(existingSession.id);
+    } else {
+      // 如果创建失败，仍然进入新闻聊天页面
+      location.hash = `#/news-chat?key=${encodeURIComponent(String(key))}`;
+    }
   };
 
   const parseRoute = () => {
@@ -3226,14 +3451,27 @@ ${originalText}
         return null;
       }
       
-      const s = findSessionById(sessionId);
-      if (!s) return sessionData;
+      // 使用后端返回的实际ID或传入的sessionId来查找会话
+      const actualSessionId = String(sessionData.id || sessionId);
+      let s = findSessionById(actualSessionId);
       
-      // 如果返回了 messages 字段，更新到会话中
-      if (Array.isArray(sessionData.messages)) {
-        // 转换消息格式：type: "user" -> role: "user", type: "pet" -> role: "assistant"
-        s.messages = sessionData.messages.map((msg) => {
-          // 处理消息类型：user -> user, pet -> assistant
+      // 如果使用实际ID找不到，尝试用传入的sessionId查找（兼容ID不一致的情况）
+      if (!s && actualSessionId !== String(sessionId)) {
+        s = findSessionById(sessionId);
+      }
+      
+      // 如果本地找不到会话，将获取到的会话添加到本地状态中
+      if (!s) {
+        const tags = Array.isArray(sessionData.tags) ? sessionData.tags : (sessionData.tags ? [sessionData.tags] : []);
+        const title = (sessionData.title ?? sessionData.pageTitle ?? "").trim() || "未命名会话";
+        const preview = (sessionData.pageDescription ?? sessionData.preview ?? sessionData.summary ?? "").trim();
+        const updatedAt = Number(sessionData.updatedAt ?? sessionData.updated_at ?? Date.now());
+        const createdAt = Number(sessionData.createdAt ?? sessionData.created_at ?? updatedAt);
+        const lastAccessTime = Number(sessionData.lastAccessTime ?? sessionData.last_access_time ?? updatedAt);
+        const lastActiveAt = Number(sessionData.lastActiveAt ?? sessionData.last_active_at ?? lastAccessTime ?? updatedAt);
+        
+        // 转换消息格式
+        const messages = Array.isArray(sessionData.messages) ? sessionData.messages.map((msg) => {
           let role = "assistant";
           if (msg.type === "user") {
             role = "user";
@@ -3249,17 +3487,70 @@ ${originalText}
             ts: msg.timestamp || msg.ts || Date.now(),
             imageDataUrl: msg.imageDataUrl || msg.image || undefined,
           };
-        });
-        s.messageCount = s.messages.length;
+        }) : [];
+        
+        const messageCount = messages.length;
+        
+        // 创建新的会话对象并添加到本地状态
+        s = {
+          id: actualSessionId,
+          title,
+          preview,
+          tags,
+          url: sessionData.url || "",
+          pageTitle: sessionData.pageTitle || "",
+          pageDescription: sessionData.pageDescription || "",
+          pageContent: sessionData.pageContent || sessionData.content || "",
+          messageCount,
+          messages,
+          createdAt,
+          updatedAt,
+          lastAccessTime,
+          muted: sessionData.muted !== undefined ? !!sessionData.muted : false,
+          lastActiveAt,
+        };
+        
+        // 添加前再次检查，避免重复
+        const existing = findSessionById(actualSessionId);
+        if (!existing) {
+          state.sessions.push(s);
+        } else {
+          // 如果已存在，使用已存在的会话对象
+          s = existing;
+        }
+      } else {
+        // 如果返回了 messages 字段，更新到会话中
+        if (Array.isArray(sessionData.messages)) {
+          // 转换消息格式：type: "user" -> role: "user", type: "pet" -> role: "assistant"
+          s.messages = sessionData.messages.map((msg) => {
+            // 处理消息类型：user -> user, pet -> assistant
+            let role = "assistant";
+            if (msg.type === "user") {
+              role = "user";
+            } else if (msg.type === "pet" || msg.type === "assistant" || msg.type === "bot" || msg.type === "ai") {
+              role = "assistant";
+            } else if (msg.role) {
+              role = msg.role;
+            }
+            
+            return {
+              role: role,
+              content: msg.content || "",
+              ts: msg.timestamp || msg.ts || Date.now(),
+              imageDataUrl: msg.imageDataUrl || msg.image || undefined,
+            };
+          });
+          s.messageCount = s.messages.length;
+        }
+        
+        // 更新其他会话信息（无论是否有 messages）
+        if (sessionData.title) s.title = sessionData.title;
+        if (sessionData.pageTitle) s.pageTitle = sessionData.pageTitle;
+        if (sessionData.pageDescription) s.pageDescription = sessionData.pageDescription;
+        if (sessionData.preview) s.preview = sessionData.preview;
+        // 如果接口返回了页面上下文，更新到会话上（即使为空字符串也要更新，避免显示旧数据）
+        if (sessionData.pageContent !== undefined) s.pageContent = sessionData.pageContent || "";
       }
-      
-      // 更新其他会话信息（无论是否有 messages）
-      if (sessionData.title) s.title = sessionData.title;
-      if (sessionData.pageTitle) s.pageTitle = sessionData.pageTitle;
-      if (sessionData.pageDescription) s.pageDescription = sessionData.pageDescription;
-      if (sessionData.preview) s.preview = sessionData.preview;
-      // 如果接口返回了页面上下文，更新到会话上（即使为空字符串也要更新，避免显示旧数据）
-      if (sessionData.pageContent !== undefined) s.pageContent = sessionData.pageContent || "";
       
       return sessionData;
     } catch (error) {
@@ -3273,9 +3564,13 @@ ${originalText}
     
     // 处理会话聊天路由
     if (r.name === "chat" && r.id) {
-      // 只有在会话视图时才处理会话聊天路由
+      // 记录进入聊天页面的来源标签页（如果还没有记录）
+      if (state.chatSourceTab === null) {
+        state.chatSourceTab = state.bottomTab;
+      }
+      // 如果当前不在会话标签页，先切换到会话标签页
       if (state.bottomTab !== "sessions") {
-        return;
+        await setBottomTab("sessions", { persist: false });
       }
       state.activeSessionId = r.id;
       state.activeNewsKey = "";
@@ -3295,6 +3590,8 @@ ${originalText}
       if (state.bottomTab !== "news") {
         return;
       }
+      // 记录进入聊天页面的来源标签页
+      state.chatSourceTab = state.bottomTab;
       state.activeNewsKey = r.key;
       state.activeSessionId = "";
       setView("newsChat");
@@ -3306,6 +3603,7 @@ ${originalText}
     // 默认返回列表视图
     state.activeSessionId = "";
     state.activeNewsKey = "";
+    state.chatSourceTab = null; // 清除来源记录
     setView("list");
     if (state.bottomTab === "sessions") {
       renderList();
