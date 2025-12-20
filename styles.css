@@ -456,6 +456,37 @@ input{border:0;outline:none}
   font-size:12px;
 }
 
+/* 📤 按钮样式（发送 prompt 接口，参考 YiPet 项目） */
+.chatMsgActionBtn--prompt{
+  font-size:16px;
+  font-weight:500;
+  color:#07c160;
+  background:white;
+  border:1px solid #07c160;
+  transition:all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.chatMsgActionBtn--prompt:hover{
+  background:#07c160;
+  color:white;
+  border-color:#07c160;
+  transform:scale(1.1);
+  opacity:1;
+}
+.chatMsgActionBtn--prompt:active{
+  transform:scale(0.95);
+}
+.chatMsgActionBtn--prompt:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+  pointer-events:none;
+}
+
 /* Markdown/代码块基础样式（服务 Mermaid 代码块展示） */
 .chatBubble--md{
   /* marked 输出为 HTML（p/ul/pre...），这里不要用 pre-wrap，避免默认段落间距叠加导致“空一大块” */

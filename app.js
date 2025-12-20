@@ -2185,6 +2185,7 @@ ${originalText}
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
                 <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--prompt" data-action="send-prompt" title="发送到 AI" data-message-index="${idx}">📤</button>
               </div>
             </div>
           `;
@@ -2324,6 +2325,20 @@ ${originalText}
         if (currentIndex < 0 || !session.messages || currentIndex >= session.messages.length - 1) return;
 
         await moveMessageDown(session, currentIndex, container);
+        return;
+      }
+
+      // 发送 prompt 接口
+      const sendPromptBtn = e.target.closest('[data-action="send-prompt"]');
+      if (sendPromptBtn) {
+        e.stopPropagation();
+        const msgDiv = sendPromptBtn.closest('.chatMsg');
+        if (!msgDiv) return;
+
+        const msgIndex = parseInt(sendPromptBtn.getAttribute('data-message-index') || '-1');
+        if (msgIndex < 0 || !session.messages || !session.messages[msgIndex]) return;
+
+        await handleSendPrompt(session, msgIndex, sendPromptBtn);
         return;
       }
     };
@@ -2484,6 +2499,135 @@ ${originalText}
       }
     } catch (error) {
       console.error('同步消息顺序失败:', error);
+    }
+  };
+
+  // 构建会话上下文（参考 YiPet 项目）
+  const buildConversationContext = (session, currentMsgIndex) => {
+    const context = {
+      messages: [],
+      pageContent: '',
+      hasHistory: false
+    };
+
+    if (!session) return context;
+
+    // 获取消息历史（排除当前消息）
+    if (session.messages && Array.isArray(session.messages) && session.messages.length > 0) {
+      context.messages = session.messages
+        .filter((msg, index) => {
+          // 只包含当前消息之前的消息，排除当前消息本身
+          if (index >= currentMsgIndex) return false;
+          const role = normalizeRole(msg);
+          return role === 'user' || role === 'assistant';
+        });
+      context.hasHistory = context.messages.length > 0;
+    }
+
+    // 获取页面内容
+    if (session.pageContent && String(session.pageContent).trim()) {
+      context.pageContent = String(session.pageContent).trim();
+    }
+
+    return context;
+  };
+
+  // 处理发送 prompt 接口
+  const handleSendPrompt = async (session, msgIndex, button) => {
+    if (!session || !session.messages || msgIndex < 0 || msgIndex >= session.messages.length) {
+      showToast('消息不存在');
+      return;
+    }
+
+    const message = session.messages[msgIndex];
+    const messageContent = normalizeText(message);
+    
+    if (!messageContent.trim()) {
+      showToast('消息内容为空，无法发送');
+      return;
+    }
+
+    // 禁用按钮，显示加载状态
+    const originalHTML = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '⏳';
+    button.style.opacity = '0.5';
+
+    try {
+      // 构建 prompt 请求
+      const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
+      
+      // 构建用户提示词，包含上下文内容（参考 YiPet 项目）
+      const baseMessageContent = messageContent.trim();
+      let userPrompt = baseMessageContent;
+
+      // 获取会话上下文
+      const context = buildConversationContext(session, msgIndex);
+
+      // 如果存在会话历史，在消息内容前添加上下文
+      if (context.hasHistory && context.messages.length > 0) {
+        // 构建消息历史上下文（只包含当前消息之前的历史）
+        let conversationContext = '\n\n## 会话历史：\n\n';
+        context.messages.forEach((msg) => {
+          const role = normalizeRole(msg) === 'user' ? '用户' : '助手';
+          const content = normalizeText(msg);
+          if (content && content !== baseMessageContent) { // 排除当前消息本身
+            conversationContext += `${role}：${content}\n\n`;
+          }
+        });
+        // 将上下文放在前面，当前消息内容放在后面
+        userPrompt = conversationContext + `## 当前需要处理的消息：\n\n${baseMessageContent}`;
+      }
+
+      // 如果有页面内容，也添加页面内容
+      if (context.pageContent) {
+        userPrompt += `\n\n## 页面内容：\n\n${context.pageContent}`;
+      }
+
+      // 调用 prompt 接口
+      const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
+
+      if (!aiResponse || !aiResponse.trim()) {
+        showToast('AI 回复为空');
+        return;
+      }
+
+      // 添加 AI 回复到会话（在用户消息之后）
+      const now = Date.now();
+      const aiMessage = {
+        role: 'assistant',
+        content: aiResponse.trim(),
+        ts: now
+      };
+
+      // 找到用户消息的位置，在其后插入 AI 回复
+      let insertIndex = msgIndex + 1;
+      // 如果下一条消息已经是 AI 回复，则替换它；否则插入新消息
+      if (insertIndex < session.messages.length && 
+          normalizeRole(session.messages[insertIndex]) === 'assistant') {
+        session.messages[insertIndex] = aiMessage;
+      } else {
+        session.messages.splice(insertIndex, 0, aiMessage);
+      }
+
+      // 更新会话信息
+      session.messageCount = session.messages.length;
+      session.lastActiveAt = now;
+      session.lastAccessTime = now;
+      session.updatedAt = now;
+
+      // 重新渲染聊天界面
+      renderChat();
+
+      showToast('AI 回复已添加');
+    } catch (error) {
+      console.error('发送 prompt 失败:', error);
+      showToast('发送失败，请重试');
+    } finally {
+      // 恢复按钮状态
+      button.disabled = false;
+      button.innerHTML = originalHTML;
+      button.style.opacity = '';
     }
   };
 
