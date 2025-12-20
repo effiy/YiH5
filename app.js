@@ -218,8 +218,9 @@
     q: "",
     selectedDate: "", // 选择的日期
     lastError: "", // 拉取数据失败时的提示
-    view: "list", // list | chat
+    view: "list", // list | chat | newsChat
     activeSessionId: "",
+    activeNewsKey: "", // 当前激活的新闻 key
     isDraggingTag: false, // 标签拖拽排序中（用于抑制 click 触发筛选）
     faq: {
       items: [],
@@ -255,6 +256,8 @@
       filter: {
         selectedTags: [], // 选中的标签数组
       },
+      // 新闻聊天消息存储：key -> messages[]
+      chatMessages: {},
     },
     auth: {
       token: "",
@@ -691,18 +694,23 @@
 
   const syncVisibility = () => {
     const isSessions = state.bottomTab === "sessions";
+    const isNews = state.bottomTab === "news";
     const isChat = isSessions && state.view === "chat";
+    const isNewsChat = isNews && state.view === "newsChat";
 
     // 页面显示：三者互斥
-    if (dom.pageNews) dom.pageNews.hidden = isSessions;
+    if (dom.pageNews) dom.pageNews.hidden = isSessions || isNewsChat;
     if (dom.pageSessions) dom.pageSessions.hidden = !isSessions || isChat;
-    if (dom.pageChat) dom.pageChat.hidden = !isSessions || !isChat;
+    if (dom.pageChat) dom.pageChat.hidden = (!isSessions || !isChat) && (!isNews || !isNewsChat);
 
-    // 样式与返回按钮：只在“会话-聊天页”生效
-    if (isChat) dom.app.classList.add("is-chat");
-    else dom.app.classList.remove("is-chat");
-    if (isChat) mountChatBackBtn();
-    else unmountChatBackBtn();
+    // 样式与返回按钮：在"会话-聊天页"或"新闻-聊天页"生效
+    if (isChat || isNewsChat) {
+      dom.app.classList.add("is-chat");
+      mountChatBackBtn();
+    } else {
+      dom.app.classList.remove("is-chat");
+      unmountChatBackBtn();
+    }
   };
 
   // ---------- News ----------
@@ -742,7 +750,7 @@
       ? `<a class="newsTitleLink" href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.title)}</a>`
       : `<span class="newsTitleLink">${escapeHtml(n.title)}</span>`;
     return `
-      <article class="newsItem">
+      <article class="newsItem" data-key="${escapeHtml(n.key || "")}">
         <div class="newsItem__title">${linkPart}</div>
         ${n.description ? `<div class="newsItem__desc">${escapeHtml(n.description)}</div>` : ""}
         <div class="newsItem__meta">
@@ -1071,6 +1079,11 @@
     if (next === "news") {
       state.view = "list";
       state.activeSessionId = "";
+    }
+    // 切到会话时不应残留新闻聊天态
+    if (next === "sessions") {
+      state.view = "list";
+      state.activeNewsKey = "";
     }
 
     syncBottomNavActive();
@@ -1956,6 +1969,29 @@ ${originalText}
   };
 
   const openUrl = () => {
+    // 优先检查新闻聊天页面
+    if (state.view === "newsChat" && state.activeNewsKey) {
+      const n = findNewsByKey(state.activeNewsKey);
+      if (!n) {
+        window.alert("找不到当前新闻，请返回列表后重试。");
+        return;
+      }
+      const url = String(n.link || "").trim();
+      if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+        window.alert("当前新闻没有有效的URL。");
+        return;
+      }
+      // 在新标签页中打开URL
+      try {
+        window.open(url, "_blank", "noopener,noreferrer");
+      } catch (e) {
+        console.warn("[YiH5] 打开URL失败：", e);
+        window.alert("无法打开URL，请检查URL格式是否正确。");
+      }
+      return;
+    }
+    
+    // 检查会话聊天页面
     const s = findSessionById(state.activeSessionId);
     if (!s) {
       window.alert("找不到当前会话，请返回列表后重试。");
@@ -2096,6 +2132,8 @@ ${originalText}
   };
 
   const findSessionById = (id) => state.sessions.find((s) => String(s.id) === String(id));
+
+  const findNewsByKey = (key) => state.news.items.find((n) => String(n.key) === String(key));
 
   const normalizeRole = (m) => {
     const r = String(m?.role ?? m?.sender ?? m?.type ?? "").toLowerCase();
@@ -2258,6 +2296,155 @@ ${originalText}
     }, 0);
   };
 
+  const renderNewsChat = () => {
+    const n = findNewsByKey(state.activeNewsKey);
+    if (!n) {
+      dom.chatMessages.innerHTML = `<div class="empty" style="background:transparent;box-shadow:none">
+        <div class="empty__icon">📰</div>
+        <div class="empty__title">找不到该新闻</div>
+        <div class="empty__desc">请返回新闻列表重试</div>
+      </div>`;
+      // 找不到新闻时隐藏"打开原文"按钮
+      if (dom.openUrlBtn) {
+        dom.openUrlBtn.hidden = true;
+      }
+      return;
+    }
+
+    const title = n.title || "新闻";
+    dom.chatTitle.textContent = title;
+
+    // 控制"打开原文"按钮的显示/隐藏：如果link以http开头则显示
+    const url = String(n.link || "").trim();
+    const shouldShowOpenUrlBtn = url && (url.startsWith("http://") || url.startsWith("https://"));
+    if (dom.openUrlBtn) {
+      dom.openUrlBtn.hidden = !shouldShowOpenUrlBtn;
+    }
+
+    // 获取新闻聊天消息
+    const msgs = Array.isArray(state.news.chatMessages[state.activeNewsKey]) 
+      ? state.news.chatMessages[state.activeNewsKey].filter(m => m != null) 
+      : [];
+
+    if (msgs.length === 0) {
+      dom.chatMessages.innerHTML = `<div class="empty" style="background:transparent;box-shadow:none">
+        <div class="empty__icon">🗨️</div>
+        <div class="empty__title">暂无消息</div>
+        <div class="empty__desc">发送一条消息开始聊天</div>
+      </div>`;
+    } else {
+      dom.chatMessages.innerHTML = msgs
+        .map((m, idx) => {
+          // 确保消息对象有效
+          if (!m || typeof m !== 'object') return '';
+          const role = normalizeRole(m);
+          const text = normalizeText(m);
+          const isMe = role === "user";
+          const cls = isMe ? "chatMsg chatMsg--me" : "chatMsg chatMsg--bot";
+          const avatar = isMe ? "我" : "AI";
+          const imageDataUrl = m.imageDataUrl || m.image || "";
+          
+          // 构建消息内容
+          let contentHtml = "";
+          if (imageDataUrl) {
+            contentHtml += `<div class="chatImage" style="max-width: 200px; margin-bottom: 6px;">
+              <img src="${escapeHtml(imageDataUrl)}" alt="图片" style="max-width: 100%; border-radius: 4px;" />
+            </div>`;
+          }
+          if (text) {
+            contentHtml += `
+              <div class="chatBubbleWrap">
+                <div class="chatBubble chatBubble--md">${renderMarkdown(text)}</div>
+              </div>
+            `;
+          }
+          if (!imageDataUrl && !text) {
+            contentHtml = `<div class="chatBubble">…</div>`;
+          }
+          
+          // 格式化时间戳（包含日期）
+          const timestamp = m.ts || m.timestamp || Date.now();
+          let timeStr = '';
+          if (timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const msgDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            
+            // 判断是否是今天、昨天或其他日期
+            if (msgDate.getTime() === today.getTime()) {
+              // 今天：只显示时间
+              timeStr = date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+            } else if (msgDate.getTime() === yesterday.getTime()) {
+              // 昨天：显示"昨天 时间"
+              timeStr = '昨天 ' + date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+            } else {
+              // 其他日期：显示"月日 时间"
+              const month = date.getMonth() + 1;
+              const day = date.getDate();
+              const time = date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+              timeStr = `${month}月${day}日 ${time}`;
+            }
+          }
+          
+          // 操作按钮容器（时间在第一行，按钮在第二行）
+          const actionsHtml = `
+            <div class="chatMsgTimeActions" data-message-index="${idx}">
+              <div class="chatMsgTime">${timeStr}</div>
+              <div class="chatMsgActions">
+                <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
+                <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--delete" data-action="delete" title="删除" data-message-index="${idx}">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          `;
+          
+          return `
+            <div class="${cls}" data-message-index="${idx}">
+              <div class="chatMsgContentRow">
+                ${isMe ? "" : `<div class="chatAvatar" aria-hidden="true">${avatar}</div>`}
+                ${contentHtml}
+                ${isMe ? `<div class="chatAvatar" aria-hidden="true">${avatar}</div>` : ""}
+              </div>
+              ${actionsHtml}
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    // 滚到底
+    requestAnimationFrame(() => {
+      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    });
+
+    // Mermaid 渲染（异步，不阻塞首屏）
+    setTimeout(() => {
+      renderMermaidIn(dom.chatMessages);
+    }, 0);
+
+    // 为消息操作按钮添加事件监听器（新闻聊天消息操作）
+    setTimeout(() => {
+      setupNewsChatMessageActions(dom.chatMessages, n);
+    }, 0);
+  };
+
   // 设置消息操作按钮功能
   const setupMessageActions = (container, session) => {
     if (!container || !session) return;
@@ -2406,6 +2593,117 @@ ${originalText}
 
     // 更新所有按钮的禁用状态
     updateMessageActionButtons(container);
+  };
+
+  // 设置新闻聊天消息操作按钮功能
+  const setupNewsChatMessageActions = (container, news) => {
+    if (!container || !news) return;
+
+    // 移除旧的事件监听器（如果存在）
+    if (container._newsChatMessageActionsSetup) {
+      container.removeEventListener('click', container._newsChatMessageActionsSetup);
+    }
+
+    // 创建统一的事件处理函数
+    const handleMessageActions = async (e) => {
+      // 复制功能
+      const copyBtn = e.target.closest('[data-action="copy"]');
+      if (copyBtn) {
+        e.stopPropagation();
+        const msgDiv = copyBtn.closest('.chatMsg');
+        if (!msgDiv) return;
+
+        try {
+          // 获取消息内容
+          const bubble = msgDiv.querySelector('.chatBubble--md') || msgDiv.querySelector('.chatBubble');
+          if (!bubble) return;
+
+          // 获取原始文本内容（去除 HTML 标签）
+          let messageContent = bubble.textContent || bubble.innerText || '';
+          
+          // 如果没有文本内容，尝试从消息数据中获取
+          if (!messageContent.trim()) {
+            const msgIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+            const msgs = state.news.chatMessages[state.activeNewsKey] || [];
+            if (msgIndex >= 0 && msgs[msgIndex]) {
+              messageContent = normalizeText(msgs[msgIndex]);
+            }
+          }
+
+          if (!messageContent.trim()) {
+            showToast('消息内容为空，无法复制');
+            return;
+          }
+
+          // 复制到剪贴板
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(messageContent.trim());
+            showToast('已复制到剪贴板');
+            
+            // 临时改变按钮图标
+            const originalHTML = copyBtn.innerHTML;
+            copyBtn.innerHTML = '✓';
+            copyBtn.style.color = '#4caf50';
+            setTimeout(() => {
+              copyBtn.innerHTML = originalHTML;
+              copyBtn.style.color = '';
+            }, 1000);
+          } else {
+            // 降级方案
+            const textArea = document.createElement('textarea');
+            textArea.value = messageContent.trim();
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showToast('已复制到剪贴板');
+            
+            // 临时改变按钮图标
+            const originalHTML = copyBtn.innerHTML;
+            copyBtn.innerHTML = '✓';
+            copyBtn.style.color = '#4caf50';
+            setTimeout(() => {
+              copyBtn.innerHTML = originalHTML;
+              copyBtn.style.color = '';
+            }, 1000);
+          }
+        } catch (error) {
+          console.error('复制失败:', error);
+          showToast('复制失败，请重试');
+        }
+        return;
+      }
+
+      // 删除消息
+      const deleteBtn = e.target.closest('[data-action="delete"]');
+      if (deleteBtn) {
+        e.stopPropagation();
+        const msgDiv = deleteBtn.closest('.chatMsg');
+        if (!msgDiv) return;
+
+        const msgIndex = parseInt(deleteBtn.getAttribute('data-message-index') || '-1');
+        const msgs = state.news.chatMessages[state.activeNewsKey] || [];
+        if (msgIndex < 0 || !msgs[msgIndex]) return;
+
+        // 确认删除
+        if (!confirm('确定要删除这条消息吗？')) {
+          return;
+        }
+
+        // 删除消息
+        msgs.splice(msgIndex, 1);
+        
+        // 重新渲染
+        renderNewsChat();
+        return;
+      }
+    };
+
+    // 保存事件处理函数引用，以便后续移除
+    container._newsChatMessageActionsSetup = handleMessageActions;
+    container.addEventListener('click', handleMessageActions);
   };
 
   // 上移消息
@@ -2886,6 +3184,10 @@ ${originalText}
     location.hash = `#/chat?id=${encodeURIComponent(String(id))}`;
   };
 
+  const navigateToNewsChat = (key) => {
+    location.hash = `#/news-chat?key=${encodeURIComponent(String(key))}`;
+  };
+
   const parseRoute = () => {
     const raw = String(location.hash || "#/").replace(/^#/, "");
     if (!raw || raw === "/") return { name: "list" };
@@ -2894,6 +3196,12 @@ ${originalText}
       const qs = qIdx >= 0 ? raw.slice(qIdx + 1) : "";
       const params = new URLSearchParams(qs);
       return { name: "chat", id: params.get("id") || "" };
+    }
+    if (raw.startsWith("/news-chat")) {
+      const qIdx = raw.indexOf("?");
+      const qs = qIdx >= 0 ? raw.slice(qIdx + 1) : "";
+      const params = new URLSearchParams(qs);
+      return { name: "newsChat", key: params.get("key") || "" };
     }
     return { name: "list" };
   };
@@ -2961,14 +3269,16 @@ ${originalText}
   };
 
   const applyRoute = async () => {
-    // 只有在会话视图时才处理路由
-    if (state.bottomTab !== "sessions") {
-      return;
-    }
-    
     const r = parseRoute();
+    
+    // 处理会话聊天路由
     if (r.name === "chat" && r.id) {
+      // 只有在会话视图时才处理会话聊天路由
+      if (state.bottomTab !== "sessions") {
+        return;
+      }
       state.activeSessionId = r.id;
+      state.activeNewsKey = "";
       setView("chat");
       // 先渲染一次（可能使用本地缓存的数据）
       renderChat();
@@ -2978,9 +3288,30 @@ ${originalText}
       renderChat();
       return;
     }
+    
+    // 处理新闻聊天路由
+    if (r.name === "newsChat" && r.key) {
+      // 只有在新闻视图时才处理新闻聊天路由
+      if (state.bottomTab !== "news") {
+        return;
+      }
+      state.activeNewsKey = r.key;
+      state.activeSessionId = "";
+      setView("newsChat");
+      // 渲染新闻聊天页面
+      renderNewsChat();
+      return;
+    }
+    
+    // 默认返回列表视图
     state.activeSessionId = "";
+    state.activeNewsKey = "";
     setView("list");
-    renderList();
+    if (state.bottomTab === "sessions") {
+      renderList();
+    } else {
+      renderNews();
+    }
   };
 
   // 从所有会话中提取唯一标签列表
@@ -3914,11 +4245,114 @@ ${originalText}
       navigateToChat(id);
     });
 
+    // 点击新闻进入聊天（点击标题链接时保持原有跳转行为）
+    dom.newsList?.addEventListener("click", (ev) => {
+      // 如果点击的是标题链接，不处理（保持原有跳转行为）
+      if (ev.target.closest(".newsTitleLink")) {
+        return;
+      }
+      // 点击新闻项的其他部分，进入新闻聊天
+      const item = ev.target.closest(".newsItem");
+      if (!item) return;
+      const key = item.dataset.key;
+      if (!key) return;
+      ev.preventDefault();
+      navigateToNewsChat(key);
+    });
+
     // 发送消息
     dom.chatComposer?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = String(dom.chatInput?.value ?? "").trim();
       if (!text) return;
+      
+      // 处理新闻聊天
+      if (state.view === "newsChat" && state.activeNewsKey) {
+        const n = findNewsByKey(state.activeNewsKey);
+        if (!n) return;
+        
+        // 初始化消息数组
+        if (!Array.isArray(state.news.chatMessages[state.activeNewsKey])) {
+          state.news.chatMessages[state.activeNewsKey] = [];
+        }
+        const msgs = state.news.chatMessages[state.activeNewsKey];
+        
+        const now = Date.now();
+        const userMessage = { role: "user", content: text, ts: now };
+        msgs.push(userMessage);
+        
+        // 清空输入框并立即渲染用户消息
+        dom.chatInput.value = "";
+        renderNewsChat();
+        
+        // 添加临时"正在思考..."消息，并禁用发送按钮
+        const sendBtn = dom.chatComposer?.querySelector('.chatComposer__btn--send');
+        const originalBtnText = sendBtn?.textContent || '发送';
+        if (sendBtn) {
+          sendBtn.disabled = true;
+          sendBtn.textContent = '发送中...';
+          sendBtn.style.opacity = '0.6';
+        }
+        
+        const thinkingMessage = { role: "assistant", content: "正在思考...", ts: Date.now() };
+        msgs.push(thinkingMessage);
+        renderNewsChat();
+        
+        // 调用 AI API 获取回复
+        try {
+          const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和新闻内容进行回复。';
+          
+          // 构建用户提示词：包含新闻标题、描述和用户消息
+          let userPrompt = `## 新闻标题：\n${n.title || ""}\n\n`;
+          if (n.description) {
+            userPrompt += `## 新闻描述：\n${n.description}\n\n`;
+          }
+          userPrompt += `## 用户问题：\n${text}`;
+          
+          // 调用 prompt 接口
+          const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
+          
+          // 移除"正在思考..."消息
+          const thinkingIndex = msgs.findIndex(m => m.content === "正在思考...");
+          if (thinkingIndex >= 0) {
+            msgs.splice(thinkingIndex, 1);
+          }
+          
+          if (aiResponse && aiResponse.trim()) {
+            const aiMessage = {
+              role: 'assistant',
+              content: aiResponse.trim(),
+              ts: Date.now()
+            };
+            msgs.push(aiMessage);
+            
+            // 重新渲染聊天界面
+            renderNewsChat();
+          } else {
+            // 如果没有回复，移除"正在思考..."消息
+            renderNewsChat();
+          }
+        } catch (error) {
+          console.error("[YiH5] 发送消息失败：", error);
+          // 移除"正在思考..."消息
+          const thinkingIndex = msgs.findIndex(m => m.content === "正在思考...");
+          if (thinkingIndex >= 0) {
+            msgs.splice(thinkingIndex, 1);
+          }
+          renderNewsChat();
+          window.alert("发送消息失败，请稍后重试。");
+        } finally {
+          // 恢复发送按钮
+          if (sendBtn) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = originalBtnText;
+            sendBtn.style.opacity = '1';
+          }
+        }
+        return;
+      }
+      
+      // 处理会话聊天
       const s = findSessionById(state.activeSessionId);
       if (!s) return;
       if (!Array.isArray(s.messages)) s.messages = [];
