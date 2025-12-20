@@ -305,8 +305,8 @@ input{border:0;outline:none}
   flex:1;
   overflow:auto;
   -webkit-overflow-scrolling: touch;
-  /* 为底部输入框预留空间，避免最后几条消息被盖住 */
-  padding: 8px 10px calc(72px + var(--safe-bottom));
+  /* 为底部输入框预留空间，避免最后几条消息被盖住（两行布局需要更多空间） */
+  padding: 8px 10px calc(120px + var(--safe-bottom));
   overscroll-behavior: contain;
   /* 降低滚动时的重绘影响（尤其长对话） */
   contain: paint;
@@ -323,9 +323,9 @@ input{border:0;outline:none}
 
 .chatMsg{
   display:flex;
+  flex-direction:column;
   gap:6px;
   margin: 8px 0;
-  align-items:flex-end;
   /* 长列表滚动性能：对支持 content-visibility 的浏览器提升明显；不支持的会忽略 */
   content-visibility: auto;
   contain: content;
@@ -333,7 +333,15 @@ input{border:0;outline:none}
 }
 .chatMsg--bot{ --chat-bubble-bg:#fff; }
 .chatMsg--me{ --chat-bubble-bg:#95ec69; }
-.chatMsg--me{justify-content:flex-end}
+
+.chatMsgContentRow{
+  display:flex;
+  gap:6px;
+  align-items:flex-end;
+}
+.chatMsg--me .chatMsgContentRow{
+  justify-content:flex-end;
+}
 .chatAvatar{
   width:30px;height:30px;border-radius:7px;
   background: rgba(0,0,0,.08);
@@ -368,42 +376,41 @@ input{border:0;outline:none}
 .chatMsg--bot .chatBubbleWrap{align-items:flex-start}
 .chatMsg--me .chatBubbleWrap{align-items:flex-end}
 
-/* 消息时间和操作按钮容器（与 YiPet 一致） */
+/* 消息时间和操作按钮容器（时间在第一行，按钮在第二行） */
 .chatMsgTimeActions{
   display:flex;
-  align-items:center;
+  flex-direction:row;
   justify-content:space-between;
-  margin-top:4px;
+  align-items:center;
+  gap:8px;
+  margin-top:0;
   max-width:78%;
   width:100%;
-  opacity:0;
+  opacity:1;
   transition:opacity 0.2s ease;
   box-sizing:border-box;
 }
-.chatMsg:hover .chatMsgTimeActions{
-  opacity:1;
-}
 .chatMsg--bot .chatMsgTimeActions{
-  margin-left:0;
+  margin-left:36px;
+  align-items:flex-start;
 }
 .chatMsg--me .chatMsgTimeActions{
   margin-left:auto;
+  margin-right:0;
+  align-items:flex-end;
 }
 
 /* 消息时间样式 */
 .chatMsgTime{
   font-size:11px;
   color:#999;
-  flex:1;
   min-width:0;
 }
 .chatMsg--me .chatMsgTime{
   text-align:right;
-  margin-right:8px;
 }
 .chatMsg--bot .chatMsgTime{
   text-align:left;
-  margin-right:8px;
 }
 
 /* 消息操作按钮容器 */
@@ -551,7 +558,8 @@ input{border:0;outline:none}
 
 .chatComposer{
   display:flex;
-  gap:10px;
+  flex-direction:column;
+  gap:8px;
   padding:
     10px
     calc(10px + var(--safe-right))
@@ -560,9 +568,20 @@ input{border:0;outline:none}
   background: rgba(247,247,247,.98);
   border-top: 1px solid var(--divider);
 }
-.chatComposer__btn--faq,
-.chatComposer__btn--context,
-.chatComposer__btn--url{
+.chatComposer__topRow{
+  display:flex;
+  gap:10px;
+  width:100%;
+}
+.chatComposer__bottomRow{
+  display:flex;
+  gap:10px;
+  width:100%;
+  align-items:center;
+}
+.chatComposer__topRow .chatComposer__btn--faq,
+.chatComposer__topRow .chatComposer__btn--context,
+.chatComposer__topRow .chatComposer__btn--url{
   min-width:64px;
   height:40px;
   border-radius:999px;
@@ -577,13 +596,13 @@ input{border:0;outline:none}
   gap:6px;
   white-space:nowrap;
 }
-.chatComposer__btn--context{
+.chatComposer__topRow .chatComposer__btn--context{
   min-width:80px;
   padding:0 20px;
 }
-.chatComposer__btn--faq:active,
-.chatComposer__btn--context:active,
-.chatComposer__btn--url:active{
+.chatComposer__topRow .chatComposer__btn--faq:active,
+.chatComposer__topRow .chatComposer__btn--context:active,
+.chatComposer__topRow .chatComposer__btn--url:active{
   opacity:.85;
 }
 .chatComposer__btnLabel{
@@ -591,9 +610,9 @@ input{border:0;outline:none}
   font-weight:600;
   line-height:1;
 }
-.chatComposer__btn--faq svg,
-.chatComposer__btn--context svg,
-.chatComposer__btn--url svg{
+.chatComposer__topRow .chatComposer__btn--faq svg,
+.chatComposer__topRow .chatComposer__btn--context svg,
+.chatComposer__topRow .chatComposer__btn--url svg{
   width:18px;
   height:18px;
   flex:none;
@@ -1133,9 +1152,6 @@ input{border:0;outline:none}
   border-radius: 12px;
   background: rgba(255,255,255,.85);
   border: 1px solid rgba(0,0,0,.06);
-}
-.chatComposer__btn--context{
-  margin-left:6px;
 }
 .contextHint{
   margin: 2px 0 10px;

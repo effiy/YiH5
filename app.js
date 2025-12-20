@@ -2177,32 +2177,25 @@ ${originalText}
             minute: '2-digit' 
           }) : '';
           
-          // 操作按钮容器（和时间戳在同一行）
+          // 操作按钮容器（时间在第一行，按钮在第二行）
           const actionsHtml = `
             <div class="chatMsgTimeActions" data-message-index="${idx}">
-              ${isMe ? `
-                <div class="chatMsgActions">
-                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
-                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
-                  <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
-                </div>
-                <div class="chatMsgTime">${timeStr}</div>
-              ` : `
-                <div class="chatMsgTime">${timeStr}</div>
-                <div class="chatMsgActions">
-                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
-                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
-                  <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
-                </div>
-              `}
+              <div class="chatMsgTime">${timeStr}</div>
+              <div class="chatMsgActions">
+                <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
+                <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
+              </div>
             </div>
           `;
           
           return `
             <div class="${cls}" data-message-index="${idx}">
-              ${isMe ? "" : `<div class="chatAvatar" aria-hidden="true">${avatar}</div>`}
-              ${contentHtml}
-              ${isMe ? `<div class="chatAvatar" aria-hidden="true">${avatar}</div>` : ""}
+              <div class="chatMsgContentRow">
+                ${isMe ? "" : `<div class="chatAvatar" aria-hidden="true">${avatar}</div>`}
+                ${contentHtml}
+                ${isMe ? `<div class="chatAvatar" aria-hidden="true">${avatar}</div>` : ""}
+              </div>
               ${actionsHtml}
             </div>
           `;
@@ -2230,107 +2223,114 @@ ${originalText}
   const setupMessageActions = (container, session) => {
     if (!container || !session) return;
 
-    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
-    
-    // 复制功能
-    container.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-action="copy"]');
-      if (!btn) return;
-      
-      e.stopPropagation();
-      const msgDiv = btn.closest('.chatMsg');
-      if (!msgDiv) return;
+    // 移除旧的事件监听器（如果存在）
+    if (container._messageActionsSetup) {
+      container.removeEventListener('click', container._messageActionsSetup);
+    }
 
-      try {
-        // 获取消息内容
-        const bubble = msgDiv.querySelector('.chatBubble--md') || msgDiv.querySelector('.chatBubble');
-        if (!bubble) return;
+    // 创建统一的事件处理函数
+    const handleMessageActions = async (e) => {
+      // 复制功能
+      const copyBtn = e.target.closest('[data-action="copy"]');
+      if (copyBtn) {
+        e.stopPropagation();
+        const msgDiv = copyBtn.closest('.chatMsg');
+        if (!msgDiv) return;
 
-        // 获取原始文本内容（去除 HTML 标签）
-        let messageContent = bubble.textContent || bubble.innerText || '';
-        
-        // 如果没有文本内容，尝试从消息数据中获取
-        if (!messageContent.trim()) {
-          const msgIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
-          if (msgIndex >= 0 && session.messages && session.messages[msgIndex]) {
-            messageContent = normalizeText(session.messages[msgIndex]);
+        try {
+          // 获取消息内容
+          const bubble = msgDiv.querySelector('.chatBubble--md') || msgDiv.querySelector('.chatBubble');
+          if (!bubble) return;
+
+          // 获取原始文本内容（去除 HTML 标签）
+          let messageContent = bubble.textContent || bubble.innerText || '';
+          
+          // 如果没有文本内容，尝试从消息数据中获取
+          if (!messageContent.trim()) {
+            const msgIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+            if (msgIndex >= 0 && session.messages && session.messages[msgIndex]) {
+              messageContent = normalizeText(session.messages[msgIndex]);
+            }
           }
-        }
 
-        if (!messageContent.trim()) {
-          showToast('消息内容为空，无法复制');
-          return;
-        }
+          if (!messageContent.trim()) {
+            showToast('消息内容为空，无法复制');
+            return;
+          }
 
-        // 复制到剪贴板
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(messageContent.trim());
-          showToast('已复制到剪贴板');
-          
-          // 临时改变按钮图标
-          const originalHTML = btn.innerHTML;
-          btn.innerHTML = '✓';
-          btn.style.color = '#4caf50';
-          setTimeout(() => {
-            btn.innerHTML = originalHTML;
-            btn.style.color = '';
-          }, 1000);
-        } else {
-          // 降级方案
-          const textArea = document.createElement('textarea');
-          textArea.value = messageContent.trim();
-          textArea.style.position = 'fixed';
-          textArea.style.left = '-999999px';
-          document.body.appendChild(textArea);
-          textArea.select();
-          document.execCommand('copy');
-          document.body.removeChild(textArea);
-          showToast('已复制到剪贴板');
-          
-          // 临时改变按钮图标
-          const originalHTML = btn.innerHTML;
-          btn.innerHTML = '✓';
-          btn.style.color = '#4caf50';
-          setTimeout(() => {
-            btn.innerHTML = originalHTML;
-            btn.style.color = '';
-          }, 1000);
+          // 复制到剪贴板
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(messageContent.trim());
+            showToast('已复制到剪贴板');
+            
+            // 临时改变按钮图标
+            const originalHTML = copyBtn.innerHTML;
+            copyBtn.innerHTML = '✓';
+            copyBtn.style.color = '#4caf50';
+            setTimeout(() => {
+              copyBtn.innerHTML = originalHTML;
+              copyBtn.style.color = '';
+            }, 1000);
+          } else {
+            // 降级方案
+            const textArea = document.createElement('textarea');
+            textArea.value = messageContent.trim();
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-999999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showToast('已复制到剪贴板');
+            
+            // 临时改变按钮图标
+            const originalHTML = copyBtn.innerHTML;
+            copyBtn.innerHTML = '✓';
+            copyBtn.style.color = '#4caf50';
+            setTimeout(() => {
+              copyBtn.innerHTML = originalHTML;
+              copyBtn.style.color = '';
+            }, 1000);
+          }
+        } catch (error) {
+          console.error('复制失败:', error);
+          showToast('复制失败，请重试');
         }
-      } catch (error) {
-        console.error('复制失败:', error);
-        showToast('复制失败，请重试');
+        return;
       }
-    });
 
-    // 上移消息
-    container.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-action="move-up"]');
-      if (!btn || btn.disabled) return;
-      
-      e.stopPropagation();
-      const msgDiv = btn.closest('.chatMsg');
-      if (!msgDiv) return;
+      // 上移消息
+      const moveUpBtn = e.target.closest('[data-action="move-up"]');
+      if (moveUpBtn && !moveUpBtn.disabled) {
+        e.stopPropagation();
+        const msgDiv = moveUpBtn.closest('.chatMsg');
+        if (!msgDiv) return;
 
-      const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
-      if (currentIndex <= 0) return;
+        const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+        if (currentIndex <= 0) return;
 
-      await moveMessageUp(session, currentIndex, container);
-    });
+        await moveMessageUp(session, currentIndex, container);
+        return;
+      }
 
-    // 下移消息
-    container.addEventListener('click', async (e) => {
-      const btn = e.target.closest('[data-action="move-down"]');
-      if (!btn || btn.disabled) return;
-      
-      e.stopPropagation();
-      const msgDiv = btn.closest('.chatMsg');
-      if (!msgDiv) return;
+      // 下移消息
+      const moveDownBtn = e.target.closest('[data-action="move-down"]');
+      if (moveDownBtn && !moveDownBtn.disabled) {
+        e.stopPropagation();
+        const msgDiv = moveDownBtn.closest('.chatMsg');
+        if (!msgDiv) return;
 
-      const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
-      if (currentIndex < 0 || !session.messages || currentIndex >= session.messages.length - 1) return;
+        const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+        if (currentIndex < 0 || !session.messages || currentIndex >= session.messages.length - 1) return;
 
-      await moveMessageDown(session, currentIndex, container);
-    });
+        await moveMessageDown(session, currentIndex, container);
+        return;
+      }
+    };
+
+    // 保存事件处理函数引用，以便后续移除
+    container._messageActionsSetup = handleMessageActions;
+    container.addEventListener('click', handleMessageActions);
 
     // 更新所有按钮的禁用状态
     updateMessageActionButtons(container);
@@ -2340,16 +2340,54 @@ ${originalText}
   const moveMessageUp = async (session, currentIndex, container) => {
     if (!session.messages || currentIndex <= 0 || currentIndex >= session.messages.length) return;
 
-    // 交换数组中的位置
+    // 获取所有消息元素
+    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    if (currentIndex >= allMessages.length) return;
+
+    const currentMsgDiv = allMessages[currentIndex];
+    const previousMsgDiv = allMessages[currentIndex - 1];
+    
+    if (!currentMsgDiv || !previousMsgDiv) return;
+
+    // 保存当前滚动位置
+    const scrollTop = container.scrollTop;
+    const scrollHeight = container.scrollHeight;
+
+    // 先交换数组中的位置
     const temp = session.messages[currentIndex];
     session.messages[currentIndex] = session.messages[currentIndex - 1];
     session.messages[currentIndex - 1] = temp;
 
+    // 在DOM中交换位置（添加动画效果）
+    currentMsgDiv.style.transition = 'transform 0.3s ease';
+    previousMsgDiv.style.transition = 'transform 0.3s ease';
+    
+    // 使用 insertBefore 交换位置
+    container.insertBefore(currentMsgDiv, previousMsgDiv);
+
+    // 更新所有消息的 data-message-index 属性
+    const updatedMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    updatedMessages.forEach((msgDiv, index) => {
+      msgDiv.setAttribute('data-message-index', index);
+      // 更新内部的时间操作容器的 data-message-index
+      const timeActions = msgDiv.querySelector('.chatMsgTimeActions');
+      if (timeActions) {
+        timeActions.setAttribute('data-message-index', index);
+      }
+    });
+
     // 更新会话时间戳
     session.updatedAt = Date.now();
 
-    // 重新渲染
-    renderChat();
+    // 更新所有按钮状态
+    updateMessageActionButtons(container);
+
+    // 恢复滚动位置（保持相对位置）
+    requestAnimationFrame(() => {
+      const newScrollHeight = container.scrollHeight;
+      const scrollDiff = newScrollHeight - scrollHeight;
+      container.scrollTop = scrollTop + scrollDiff;
+    });
 
     // 尝试同步到后端
     try {
@@ -2375,16 +2413,59 @@ ${originalText}
   const moveMessageDown = async (session, currentIndex, container) => {
     if (!session.messages || currentIndex < 0 || currentIndex >= session.messages.length - 1) return;
 
-    // 交换数组中的位置
+    // 获取所有消息元素
+    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    if (currentIndex >= allMessages.length - 1) return;
+
+    const currentMsgDiv = allMessages[currentIndex];
+    const nextMsgDiv = allMessages[currentIndex + 1];
+    
+    if (!currentMsgDiv || !nextMsgDiv) return;
+
+    // 保存当前滚动位置
+    const scrollTop = container.scrollTop;
+    const scrollHeight = container.scrollHeight;
+
+    // 先交换数组中的位置
     const temp = session.messages[currentIndex];
     session.messages[currentIndex] = session.messages[currentIndex + 1];
     session.messages[currentIndex + 1] = temp;
 
+    // 在DOM中交换位置（添加动画效果）
+    currentMsgDiv.style.transition = 'transform 0.3s ease';
+    nextMsgDiv.style.transition = 'transform 0.3s ease';
+    
+    // 使用 insertBefore 交换位置（将当前消息插入到下一个消息之后）
+    currentMsgDiv.remove();
+    if (nextMsgDiv.nextSibling) {
+      container.insertBefore(currentMsgDiv, nextMsgDiv.nextSibling);
+    } else {
+      container.appendChild(currentMsgDiv);
+    }
+
+    // 更新所有消息的 data-message-index 属性
+    const updatedMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    updatedMessages.forEach((msgDiv, index) => {
+      msgDiv.setAttribute('data-message-index', index);
+      // 更新内部的时间操作容器的 data-message-index
+      const timeActions = msgDiv.querySelector('.chatMsgTimeActions');
+      if (timeActions) {
+        timeActions.setAttribute('data-message-index', index);
+      }
+    });
+
     // 更新会话时间戳
     session.updatedAt = Date.now();
 
-    // 重新渲染
-    renderChat();
+    // 更新所有按钮状态
+    updateMessageActionButtons(container);
+
+    // 恢复滚动位置（保持相对位置）
+    requestAnimationFrame(() => {
+      const newScrollHeight = container.scrollHeight;
+      const scrollDiff = newScrollHeight - scrollHeight;
+      container.scrollTop = scrollTop + scrollDiff;
+    });
 
     // 尝试同步到后端
     try {
@@ -2417,10 +2498,16 @@ ${originalText}
       const moveDownBtn = actions.querySelector('[data-action="move-down"]');
 
       if (moveUpBtn) {
-        moveUpBtn.disabled = index === 0;
+        const canMoveUp = index > 0;
+        moveUpBtn.disabled = !canMoveUp;
+        // 同时更新样式以保持一致性
+        moveUpBtn.style.opacity = canMoveUp ? '0.7' : '0.3';
       }
       if (moveDownBtn) {
-        moveDownBtn.disabled = index === allMessages.length - 1;
+        const canMoveDown = index < allMessages.length - 1;
+        moveDownBtn.disabled = !canMoveDown;
+        // 同时更新样式以保持一致性
+        moveDownBtn.style.opacity = canMoveDown ? '0.7' : '0.3';
       }
     });
   };
