@@ -183,18 +183,25 @@
     },
     parseYMD(ymd) {
       if (!ymd) return null;
-      const parts = String(ymd).split("-");
-      if (!Array.isArray(parts) || parts.length !== 3) return null;
-      // 确保所有部分都存在且非空
-      if (!parts[0] || !parts[1] || !parts[2]) return null;
-      const y = Number(parts[0]);
-      const m = Number(parts[1]);
-      const d = Number(parts[2]);
-      if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
-      const dt = new Date(y, m - 1, d);
-      // 防止 2025-02-31 之类被 Date 自动进位
-      if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
-      return dt;
+      try {
+        const parts = String(ymd).split("-");
+        // 更严格的检查：确保 parts 是数组且有 3 个元素
+        if (!parts || !Array.isArray(parts) || parts.length !== 3) return null;
+        // 确保所有部分都存在且非空（防止访问 null/undefined）
+        if (!parts || typeof parts[0] === 'undefined' || typeof parts[1] === 'undefined' || typeof parts[2] === 'undefined') return null;
+        if (!parts[0] || !parts[1] || !parts[2]) return null;
+        const y = Number(parts[0]);
+        const m = Number(parts[1]);
+        const d = Number(parts[2]);
+        if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+        const dt = new Date(y, m - 1, d);
+        // 防止 2025-02-31 之类被 Date 自动进位
+        if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+        return dt;
+      } catch (e) {
+        console.error("parseYMD error:", e, "input:", ymd);
+        return null;
+      }
     },
     addDaysYMD(ymd, delta) {
       const base = this.parseYMD(ymd) || new Date();
