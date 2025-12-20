@@ -2219,6 +2219,11 @@ ${originalText}
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
                 </button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--delete" data-action="delete" title="删除" data-message-index="${idx}">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                </button>
               </div>
             </div>
           `;
@@ -2372,6 +2377,25 @@ ${originalText}
         if (msgIndex < 0 || !session.messages || !session.messages[msgIndex]) return;
 
         await handleSendPrompt(session, msgIndex, sendPromptBtn);
+        return;
+      }
+
+      // 删除消息
+      const deleteBtn = e.target.closest('[data-action="delete"]');
+      if (deleteBtn) {
+        e.stopPropagation();
+        const msgDiv = deleteBtn.closest('.chatMsg');
+        if (!msgDiv) return;
+
+        const msgIndex = parseInt(deleteBtn.getAttribute('data-message-index') || '-1');
+        if (msgIndex < 0 || !session.messages || !session.messages[msgIndex]) return;
+
+        // 确认删除
+        if (!confirm('确定要删除这条消息吗？')) {
+          return;
+        }
+
+        await deleteMessage(session, msgIndex, container);
         return;
       }
     };
@@ -2590,18 +2614,16 @@ ${originalText}
       // 构建 prompt 请求
       const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
       
-      // 构建用户提示词，只使用当前消息内容和页面上下文
-      const baseMessageContent = messageContent.trim();
-      let userPrompt = baseMessageContent;
+      // 构建用户提示词：只使用当前消息内容和页面上下文，不包含其他消息历史或其他内容
+      let userPrompt = messageContent.trim();
 
-      // 只获取页面上下文，不包含其他消息历史
-      // 发送 prompt 接口时应该只使用对应的消息内容和页面上下文
+      // 只添加页面上下文（pageContent），不包含页面描述、页面标题或其他消息历史
       if (session.pageContent && String(session.pageContent).trim()) {
         const pageContent = String(session.pageContent).trim();
         userPrompt += `\n\n## 页面内容：\n\n${pageContent}`;
       }
 
-      // 调用 prompt 接口
+      // 调用 prompt 接口（只传递当前消息内容和页面上下文）
       const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
 
       if (!aiResponse || !aiResponse.trim()) {
@@ -2685,6 +2707,117 @@ ${originalText}
       button.innerHTML = originalHTML;
       button.style.opacity = '';
     }
+  };
+
+  // 删除消息
+  const deleteMessage = async (session, msgIndex, container) => {
+    if (!session.messages || msgIndex < 0 || msgIndex >= session.messages.length) return;
+
+    // 获取所有消息元素
+    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    if (msgIndex >= allMessages.length) return;
+
+    const msgDiv = allMessages[msgIndex];
+    if (!msgDiv) return;
+
+    // 保存当前滚动位置
+    const scrollTop = container.scrollTop;
+    const scrollHeight = container.scrollHeight;
+    const msgHeight = msgDiv.offsetHeight;
+
+    // 从数组中删除消息
+    session.messages.splice(msgIndex, 1);
+
+    // 更新会话信息
+    session.messageCount = session.messages.length;
+    session.updatedAt = Date.now();
+
+    // 从DOM中删除消息元素（添加淡出动画）
+    msgDiv.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+    msgDiv.style.opacity = '0';
+    msgDiv.style.transform = 'translateX(-20px)';
+    
+    setTimeout(() => {
+      msgDiv.remove();
+
+      // 更新所有消息的 data-message-index 属性
+      const updatedMessages = Array.from(container.querySelectorAll('.chatMsg'));
+      updatedMessages.forEach((msgDiv, index) => {
+        msgDiv.setAttribute('data-message-index', index);
+        // 更新内部的时间操作容器的 data-message-index
+        const timeActions = msgDiv.querySelector('.chatMsgTimeActions');
+        if (timeActions) {
+          timeActions.setAttribute('data-message-index', index);
+        }
+        // 更新所有按钮的 data-message-index
+        const actionButtons = msgDiv.querySelectorAll('[data-message-index]');
+        actionButtons.forEach(btn => {
+          btn.setAttribute('data-message-index', index);
+        });
+      });
+
+      // 更新所有按钮状态
+      updateMessageActionButtons(container);
+
+      // 如果没有消息了，重新渲染以显示空状态
+      if (session.messages.length === 0) {
+        renderChat();
+        return;
+      }
+
+      // 恢复滚动位置（保持相对位置）
+      requestAnimationFrame(() => {
+        const newScrollHeight = container.scrollHeight;
+        const scrollDiff = newScrollHeight - scrollHeight;
+        container.scrollTop = Math.max(0, scrollTop + scrollDiff - msgHeight);
+      });
+    }, 200);
+
+    // 尝试同步到后端
+    try {
+      const messagesForBackend = (session.messages || []).map((m) => {
+        const role = normalizeRole(m);
+        return {
+          type: role === "user" ? "user" : "pet",
+          content: normalizeText(m),
+          timestamp: m.ts || m.timestamp || Date.now(),
+          imageDataUrl: m.imageDataUrl || m.image || undefined,
+        };
+      });
+
+      const payload = {
+        id: String(session.id),
+        url: session.url || "",
+        pageTitle: (session.pageTitle && String(session.pageTitle).trim()) || session.title || "",
+        pageDescription: (session.pageDescription && String(session.pageDescription).trim()) || session.preview || "",
+        pageContent: session.pageContent || "",
+        tags: Array.isArray(session.tags) ? session.tags : [],
+        createdAt: session.createdAt || Date.now(),
+        updatedAt: session.updatedAt || Date.now(),
+        lastAccessTime: session.lastAccessTime || Date.now(),
+        messages: messagesForBackend,
+      };
+
+      const resp = await fetch("https://api.effiy.cn/session/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!resp.ok) {
+        console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
+      } else {
+        const data = await resp.json().catch(() => null);
+        console.log("[YiH5] 消息删除已保存到后端:", data);
+      }
+    } catch (e) {
+      console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
+    }
+
+    showToast('消息已删除');
   };
 
   // 更新消息操作按钮的禁用状态
@@ -3820,29 +3953,16 @@ ${originalText}
       try {
         const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
         
-        // 构建用户提示词，包含上下文内容
-        const context = buildConversationContext(s, s.messages.length - 1);
+        // 构建用户提示词：只使用当前消息内容和页面上下文，不包含其他消息历史
         let userPrompt = text;
 
-        // 如果存在会话历史，在消息内容前添加上下文
-        if (context.hasHistory && context.messages.length > 0) {
-          let conversationContext = '\n\n## 会话历史：\n\n';
-          context.messages.forEach((msg) => {
-            const role = normalizeRole(msg) === 'user' ? '用户' : '助手';
-            const content = normalizeText(msg);
-            if (content && content !== text) {
-              conversationContext += `${role}：${content}\n\n`;
-            }
-          });
-          userPrompt = conversationContext + `## 当前需要处理的消息：\n\n${text}`;
+        // 只添加页面上下文（pageContent），不包含页面描述、页面标题或其他消息历史
+        if (s.pageContent && String(s.pageContent).trim()) {
+          const pageContent = String(s.pageContent).trim();
+          userPrompt += `\n\n## 页面内容：\n\n${pageContent}`;
         }
 
-        // 如果有页面内容，也添加页面内容
-        if (context.pageContent) {
-          userPrompt += `\n\n## 页面内容：\n\n${context.pageContent}`;
-        }
-
-        // 调用 prompt 接口
+        // 调用 prompt 接口（只传递当前消息内容和页面上下文）
         const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
 
         // 移除"正在思考..."消息

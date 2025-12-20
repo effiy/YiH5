@@ -487,6 +487,37 @@ input{border:0;outline:none}
   pointer-events:none;
 }
 
+/* 删除按钮样式 */
+.chatMsgActionBtn--delete{
+  font-size:16px;
+  font-weight:500;
+  color:var(--danger);
+  background:white;
+  border:1px solid var(--danger);
+  transition:all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.chatMsgActionBtn--delete:hover{
+  background:var(--danger);
+  color:white;
+  border-color:var(--danger);
+  transform:scale(1.1);
+  opacity:1;
+}
+.chatMsgActionBtn--delete:active{
+  transform:scale(0.95);
+}
+.chatMsgActionBtn--delete:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+  pointer-events:none;
+}
+
 /* Markdown/代码块基础样式（服务 Mermaid 代码块展示） */
 .chatBubble--md{
   /* marked 输出为 HTML（p/ul/pre...），这里不要用 pre-wrap，避免默认段落间距叠加导致“空一大块” */
