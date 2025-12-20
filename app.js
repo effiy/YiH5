@@ -2170,11 +2170,40 @@ ${originalText}
             contentHtml = `<div class="chatBubble">…</div>`;
           }
           
+          // 格式化时间戳
+          const timestamp = m.ts || m.timestamp || Date.now();
+          const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+          }) : '';
+          
+          // 操作按钮容器（和时间戳在同一行）
+          const actionsHtml = `
+            <div class="chatMsgTimeActions" data-message-index="${idx}">
+              ${isMe ? `
+                <div class="chatMsgActions">
+                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
+                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
+                  <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
+                </div>
+                <div class="chatMsgTime">${timeStr}</div>
+              ` : `
+                <div class="chatMsgTime">${timeStr}</div>
+                <div class="chatMsgActions">
+                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
+                  <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
+                  <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
+                </div>
+              `}
+            </div>
+          `;
+          
           return `
-            <div class="${cls}">
+            <div class="${cls}" data-message-index="${idx}">
               ${isMe ? "" : `<div class="chatAvatar" aria-hidden="true">${avatar}</div>`}
               ${contentHtml}
               ${isMe ? `<div class="chatAvatar" aria-hidden="true">${avatar}</div>` : ""}
+              ${actionsHtml}
             </div>
           `;
         })
@@ -2190,6 +2219,238 @@ ${originalText}
     setTimeout(() => {
       renderMermaidIn(dom.chatMessages);
     }, 0);
+
+    // 为消息操作按钮添加事件监听器
+    setTimeout(() => {
+      setupMessageActions(dom.chatMessages, s);
+    }, 0);
+  };
+
+  // 设置消息操作按钮功能
+  const setupMessageActions = (container, session) => {
+    if (!container || !session) return;
+
+    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    
+    // 复制功能
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action="copy"]');
+      if (!btn) return;
+      
+      e.stopPropagation();
+      const msgDiv = btn.closest('.chatMsg');
+      if (!msgDiv) return;
+
+      try {
+        // 获取消息内容
+        const bubble = msgDiv.querySelector('.chatBubble--md') || msgDiv.querySelector('.chatBubble');
+        if (!bubble) return;
+
+        // 获取原始文本内容（去除 HTML 标签）
+        let messageContent = bubble.textContent || bubble.innerText || '';
+        
+        // 如果没有文本内容，尝试从消息数据中获取
+        if (!messageContent.trim()) {
+          const msgIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+          if (msgIndex >= 0 && session.messages && session.messages[msgIndex]) {
+            messageContent = normalizeText(session.messages[msgIndex]);
+          }
+        }
+
+        if (!messageContent.trim()) {
+          showToast('消息内容为空，无法复制');
+          return;
+        }
+
+        // 复制到剪贴板
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(messageContent.trim());
+          showToast('已复制到剪贴板');
+          
+          // 临时改变按钮图标
+          const originalHTML = btn.innerHTML;
+          btn.innerHTML = '✓';
+          btn.style.color = '#4caf50';
+          setTimeout(() => {
+            btn.innerHTML = originalHTML;
+            btn.style.color = '';
+          }, 1000);
+        } else {
+          // 降级方案
+          const textArea = document.createElement('textarea');
+          textArea.value = messageContent.trim();
+          textArea.style.position = 'fixed';
+          textArea.style.left = '-999999px';
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          showToast('已复制到剪贴板');
+          
+          // 临时改变按钮图标
+          const originalHTML = btn.innerHTML;
+          btn.innerHTML = '✓';
+          btn.style.color = '#4caf50';
+          setTimeout(() => {
+            btn.innerHTML = originalHTML;
+            btn.style.color = '';
+          }, 1000);
+        }
+      } catch (error) {
+        console.error('复制失败:', error);
+        showToast('复制失败，请重试');
+      }
+    });
+
+    // 上移消息
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action="move-up"]');
+      if (!btn || btn.disabled) return;
+      
+      e.stopPropagation();
+      const msgDiv = btn.closest('.chatMsg');
+      if (!msgDiv) return;
+
+      const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+      if (currentIndex <= 0) return;
+
+      await moveMessageUp(session, currentIndex, container);
+    });
+
+    // 下移消息
+    container.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action="move-down"]');
+      if (!btn || btn.disabled) return;
+      
+      e.stopPropagation();
+      const msgDiv = btn.closest('.chatMsg');
+      if (!msgDiv) return;
+
+      const currentIndex = parseInt(msgDiv.getAttribute('data-message-index') || '-1');
+      if (currentIndex < 0 || !session.messages || currentIndex >= session.messages.length - 1) return;
+
+      await moveMessageDown(session, currentIndex, container);
+    });
+
+    // 更新所有按钮的禁用状态
+    updateMessageActionButtons(container);
+  };
+
+  // 上移消息
+  const moveMessageUp = async (session, currentIndex, container) => {
+    if (!session.messages || currentIndex <= 0 || currentIndex >= session.messages.length) return;
+
+    // 交换数组中的位置
+    const temp = session.messages[currentIndex];
+    session.messages[currentIndex] = session.messages[currentIndex - 1];
+    session.messages[currentIndex - 1] = temp;
+
+    // 更新会话时间戳
+    session.updatedAt = Date.now();
+
+    // 重新渲染
+    renderChat();
+
+    // 尝试同步到后端
+    try {
+      const sessionId = session._id || session.id;
+      if (sessionId) {
+        await fetch(`https://api.effiy.cn/session/${encodeURIComponent(sessionId)}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({
+            messages: session.messages,
+          }),
+        });
+      }
+    } catch (error) {
+      console.error('同步消息顺序失败:', error);
+    }
+  };
+
+  // 下移消息
+  const moveMessageDown = async (session, currentIndex, container) => {
+    if (!session.messages || currentIndex < 0 || currentIndex >= session.messages.length - 1) return;
+
+    // 交换数组中的位置
+    const temp = session.messages[currentIndex];
+    session.messages[currentIndex] = session.messages[currentIndex + 1];
+    session.messages[currentIndex + 1] = temp;
+
+    // 更新会话时间戳
+    session.updatedAt = Date.now();
+
+    // 重新渲染
+    renderChat();
+
+    // 尝试同步到后端
+    try {
+      const sessionId = session._id || session.id;
+      if (sessionId) {
+        await fetch(`https://api.effiy.cn/session/${encodeURIComponent(sessionId)}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({
+            messages: session.messages,
+          }),
+        });
+      }
+    } catch (error) {
+      console.error('同步消息顺序失败:', error);
+    }
+  };
+
+  // 更新消息操作按钮的禁用状态
+  const updateMessageActionButtons = (container) => {
+    const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
+    allMessages.forEach((msgDiv, index) => {
+      const actions = msgDiv.querySelector('.chatMsgActions');
+      if (!actions) return;
+
+      const moveUpBtn = actions.querySelector('[data-action="move-up"]');
+      const moveDownBtn = actions.querySelector('[data-action="move-down"]');
+
+      if (moveUpBtn) {
+        moveUpBtn.disabled = index === 0;
+      }
+      if (moveDownBtn) {
+        moveDownBtn.disabled = index === allMessages.length - 1;
+      }
+    });
+  };
+
+  // 显示提示消息
+  const showToast = (message, type = 'info') => {
+    // 简单的提示实现，可以后续优化
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    toast.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.8);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 10000;
+      pointer-events: none;
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transition = 'opacity 0.3s ease';
+      setTimeout(() => {
+        document.body.removeChild(toast);
+      }, 300);
+    }, 2000);
   };
 
   const setView = (view) => {

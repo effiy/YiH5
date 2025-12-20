@@ -363,9 +363,91 @@ input{border:0;outline:none}
   gap:6px;
   min-width:0;
   position: relative;
+  width:100%;
 }
 .chatMsg--bot .chatBubbleWrap{align-items:flex-start}
 .chatMsg--me .chatBubbleWrap{align-items:flex-end}
+
+/* 消息时间和操作按钮容器（与 YiPet 一致） */
+.chatMsgTimeActions{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-top:4px;
+  max-width:78%;
+  width:100%;
+  opacity:0;
+  transition:opacity 0.2s ease;
+  box-sizing:border-box;
+}
+.chatMsg:hover .chatMsgTimeActions{
+  opacity:1;
+}
+.chatMsg--bot .chatMsgTimeActions{
+  margin-left:0;
+}
+.chatMsg--me .chatMsgTimeActions{
+  margin-left:auto;
+}
+
+/* 消息时间样式 */
+.chatMsgTime{
+  font-size:11px;
+  color:#999;
+  flex:1;
+  min-width:0;
+}
+.chatMsg--me .chatMsgTime{
+  text-align:right;
+  margin-right:8px;
+}
+.chatMsg--bot .chatMsgTime{
+  text-align:left;
+  margin-right:8px;
+}
+
+/* 消息操作按钮容器 */
+.chatMsgActions{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  flex-shrink:0;
+}
+
+/* 复制按钮样式 */
+.chatMsgActionBtn{
+  width:28px;
+  height:28px;
+  border-radius:50%;
+  background:rgba(0,0,0,.08);
+  border:none;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+  font-size:14px;
+  transition:all 0.2s ease;
+  opacity:0.7;
+  flex-shrink:0;
+}
+.chatMsgActionBtn:hover{
+  background:rgba(0,0,0,.12);
+  transform:scale(1.1);
+  opacity:1;
+}
+.chatMsgActionBtn:active{
+  transform:scale(0.95);
+}
+.chatMsgActionBtn:disabled{
+  opacity:0.3;
+  cursor:not-allowed;
+  pointer-events:none;
+}
+
+/* 排序按钮样式 */
+.chatMsgActionBtn--sort{
+  font-size:12px;
+}
 
 /* Markdown/代码块基础样式（服务 Mermaid 代码块展示） */
 .chatBubble--md{
