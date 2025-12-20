@@ -2170,12 +2170,41 @@ ${originalText}
             contentHtml = `<div class="chatBubble">…</div>`;
           }
           
-          // 格式化时间戳
+          // 格式化时间戳（包含日期）
           const timestamp = m.ts || m.timestamp || Date.now();
-          const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString('zh-CN', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-          }) : '';
+          let timeStr = '';
+          if (timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const msgDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            
+            // 判断是否是今天、昨天或其他日期
+            if (msgDate.getTime() === today.getTime()) {
+              // 今天：只显示时间
+              timeStr = date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+            } else if (msgDate.getTime() === yesterday.getTime()) {
+              // 昨天：显示"昨天 时间"
+              timeStr = '昨天 ' + date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+            } else {
+              // 其他日期：显示"月日 时间"
+              const month = date.getMonth() + 1;
+              const day = date.getDate();
+              const time = date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+              });
+              timeStr = `${month}月${day}日 ${time}`;
+            }
+          }
           
           // 操作按钮容器（时间在第一行，按钮在第二行）
           const actionsHtml = `
@@ -2185,7 +2214,11 @@ ${originalText}
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
                 <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
-                <button class="chatMsgActionBtn chatMsgActionBtn--prompt" data-action="send-prompt" title="发送到 AI" data-message-index="${idx}">📤</button>
+                <button class="chatMsgActionBtn chatMsgActionBtn--prompt" data-action="send-prompt" title="发送到 AI" data-message-index="${idx}">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;">
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                  </svg>
+                </button>
               </div>
             </div>
           `;
@@ -2557,31 +2590,15 @@ ${originalText}
       // 构建 prompt 请求
       const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
       
-      // 构建用户提示词，包含上下文内容（参考 YiPet 项目）
+      // 构建用户提示词，只使用当前消息内容和页面上下文
       const baseMessageContent = messageContent.trim();
       let userPrompt = baseMessageContent;
 
-      // 获取会话上下文
-      const context = buildConversationContext(session, msgIndex);
-
-      // 如果存在会话历史，在消息内容前添加上下文
-      if (context.hasHistory && context.messages.length > 0) {
-        // 构建消息历史上下文（只包含当前消息之前的历史）
-        let conversationContext = '\n\n## 会话历史：\n\n';
-        context.messages.forEach((msg) => {
-          const role = normalizeRole(msg) === 'user' ? '用户' : '助手';
-          const content = normalizeText(msg);
-          if (content && content !== baseMessageContent) { // 排除当前消息本身
-            conversationContext += `${role}：${content}\n\n`;
-          }
-        });
-        // 将上下文放在前面，当前消息内容放在后面
-        userPrompt = conversationContext + `## 当前需要处理的消息：\n\n${baseMessageContent}`;
-      }
-
-      // 如果有页面内容，也添加页面内容
-      if (context.pageContent) {
-        userPrompt += `\n\n## 页面内容：\n\n${context.pageContent}`;
+      // 只获取页面上下文，不包含其他消息历史
+      // 发送 prompt 接口时应该只使用对应的消息内容和页面上下文
+      if (session.pageContent && String(session.pageContent).trim()) {
+        const pageContent = String(session.pageContent).trim();
+        userPrompt += `\n\n## 页面内容：\n\n${pageContent}`;
       }
 
       // 调用 prompt 接口
@@ -2592,7 +2609,7 @@ ${originalText}
         return;
       }
 
-      // 添加 AI 回复到会话（在用户消息之后）
+      // 添加 AI 回复到会话（在调用接口消息之后追加）
       const now = Date.now();
       const aiMessage = {
         role: 'assistant',
@@ -2600,15 +2617,10 @@ ${originalText}
         ts: now
       };
 
-      // 找到用户消息的位置，在其后插入 AI 回复
-      let insertIndex = msgIndex + 1;
-      // 如果下一条消息已经是 AI 回复，则替换它；否则插入新消息
-      if (insertIndex < session.messages.length && 
-          normalizeRole(session.messages[insertIndex]) === 'assistant') {
-        session.messages[insertIndex] = aiMessage;
-      } else {
-        session.messages.splice(insertIndex, 0, aiMessage);
-      }
+      // 找到调用接口消息的位置，在其后追加 AI 回复
+      // 总是追加，不替换现有的回复
+      const insertIndex = msgIndex + 1;
+      session.messages.splice(insertIndex, 0, aiMessage);
 
       // 更新会话信息
       session.messageCount = session.messages.length;
@@ -2618,6 +2630,50 @@ ${originalText}
 
       // 重新渲染聊天界面
       renderChat();
+
+      // 保存会话到后端（参考 YiPet 项目，确保 AI 回复被保存）
+      try {
+        const messagesForBackend = (session.messages || []).map((m) => {
+          const role = normalizeRole(m);
+          return {
+            type: role === "user" ? "user" : "pet",
+            content: normalizeText(m),
+            timestamp: m.ts || m.timestamp || now,
+            imageDataUrl: m.imageDataUrl || m.image || undefined,
+          };
+        });
+
+        const payload = {
+          id: String(session.id),
+          url: session.url || "",
+          pageTitle: (session.pageTitle && String(session.pageTitle).trim()) || session.title || "",
+          pageDescription: (session.pageDescription && String(session.pageDescription).trim()) || session.preview || "",
+          pageContent: session.pageContent || "",
+          tags: Array.isArray(session.tags) ? session.tags : [],
+          createdAt: session.createdAt || now,
+          updatedAt: session.updatedAt || now,
+          lastAccessTime: session.lastAccessTime || now,
+          messages: messagesForBackend,
+        };
+
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
+        } else {
+          const data = await resp.json().catch(() => null);
+          console.log("[YiH5] AI 回复已保存到后端:", data);
+        }
+      } catch (e) {
+        console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
+      }
 
       showToast('AI 回复已添加');
     } catch (error) {
@@ -3726,7 +3782,7 @@ ${originalText}
     });
 
     // 发送消息
-    dom.chatComposer?.addEventListener("submit", (ev) => {
+    dom.chatComposer?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const text = String(dom.chatInput?.value ?? "").trim();
       if (!text) return;
@@ -3734,17 +3790,148 @@ ${originalText}
       if (!s) return;
       if (!Array.isArray(s.messages)) s.messages = [];
 
-      s.messages.push({ role: "user", content: text, ts: Date.now() });
-      // 简单模拟一条 AI 回复（没有后端的情况下保证聊天页可用）
-      s.messages.push({ role: "assistant", content: "收到，我已记录。", ts: Date.now() });
+      const now = Date.now();
+      const userMessage = { role: "user", content: text, ts: now };
+      s.messages.push(userMessage);
       s.messageCount = s.messages.length;
-      s.lastActiveAt = Date.now();
-      s.lastAccessTime = Date.now();
-      s.updatedAt = Date.now();
+      s.lastActiveAt = now;
+      s.lastAccessTime = now;
+      s.updatedAt = now;
       s.preview = text;
 
+      // 清空输入框并立即渲染用户消息
       dom.chatInput.value = "";
       renderChat();
+
+      // 添加临时"正在思考..."消息，并禁用发送按钮
+      const sendBtn = dom.chatComposer?.querySelector('.chatComposer__btn--send');
+      const originalBtnText = sendBtn?.textContent || '发送';
+      if (sendBtn) {
+        sendBtn.disabled = true;
+        sendBtn.textContent = '发送中...';
+        sendBtn.style.opacity = '0.6';
+      }
+
+      const thinkingMessage = { role: "assistant", content: "正在思考...", ts: Date.now() };
+      s.messages.push(thinkingMessage);
+      renderChat();
+
+      // 调用 AI API 获取回复
+      try {
+        const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
+        
+        // 构建用户提示词，包含上下文内容
+        const context = buildConversationContext(s, s.messages.length - 1);
+        let userPrompt = text;
+
+        // 如果存在会话历史，在消息内容前添加上下文
+        if (context.hasHistory && context.messages.length > 0) {
+          let conversationContext = '\n\n## 会话历史：\n\n';
+          context.messages.forEach((msg) => {
+            const role = normalizeRole(msg) === 'user' ? '用户' : '助手';
+            const content = normalizeText(msg);
+            if (content && content !== text) {
+              conversationContext += `${role}：${content}\n\n`;
+            }
+          });
+          userPrompt = conversationContext + `## 当前需要处理的消息：\n\n${text}`;
+        }
+
+        // 如果有页面内容，也添加页面内容
+        if (context.pageContent) {
+          userPrompt += `\n\n## 页面内容：\n\n${context.pageContent}`;
+        }
+
+        // 调用 prompt 接口
+        const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
+
+        // 移除"正在思考..."消息
+        const thinkingIndex = s.messages.findIndex(m => m.content === "正在思考...");
+        if (thinkingIndex >= 0) {
+          s.messages.splice(thinkingIndex, 1);
+        }
+
+        if (aiResponse && aiResponse.trim()) {
+          const aiMessage = {
+            role: 'assistant',
+            content: aiResponse.trim(),
+            ts: Date.now()
+          };
+          s.messages.push(aiMessage);
+          s.messageCount = s.messages.length;
+          s.lastActiveAt = Date.now();
+          s.lastAccessTime = Date.now();
+          s.updatedAt = Date.now();
+
+          // 重新渲染聊天界面
+          renderChat();
+
+          // 保存会话到后端（参考 YiPet 项目，确保 AI 回复被保存）
+          try {
+            const messagesForBackend = (s.messages || []).map((m) => {
+              const role = normalizeRole(m);
+              return {
+                type: role === "user" ? "user" : "pet",
+                content: normalizeText(m),
+                timestamp: m.ts || m.timestamp || Date.now(),
+                imageDataUrl: m.imageDataUrl || m.image || undefined,
+              };
+            });
+
+            const payload = {
+              id: String(s.id),
+              url: s.url || "",
+              pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
+              pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
+              pageContent: s.pageContent || "",
+              tags: Array.isArray(s.tags) ? s.tags : [],
+              createdAt: s.createdAt || Date.now(),
+              updatedAt: s.updatedAt || Date.now(),
+              lastAccessTime: s.lastAccessTime || Date.now(),
+              messages: messagesForBackend,
+            };
+
+            const resp = await fetch("https://api.effiy.cn/session/save", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...getAuthHeaders(),
+              },
+              body: JSON.stringify(payload),
+            });
+
+            if (!resp.ok) {
+              console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
+            } else {
+              const data = await resp.json().catch(() => null);
+              console.log("[YiH5] 消息和 AI 回复已保存到后端:", data);
+            }
+          } catch (e) {
+            console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
+          }
+        } else {
+          // AI 回复为空，添加一个提示消息
+          s.messages.push({ role: "assistant", content: "抱歉，AI 回复为空，请稍后重试。", ts: Date.now() });
+          renderChat();
+        }
+      } catch (error) {
+        console.error('[YiH5] 获取 AI 回复失败:', error);
+        // 移除"正在思考..."消息
+        const thinkingIndex = s.messages.findIndex(m => m.content === "正在思考...");
+        if (thinkingIndex >= 0) {
+          s.messages.splice(thinkingIndex, 1);
+        }
+        // 添加错误提示消息
+        s.messages.push({ role: "assistant", content: "获取 AI 回复失败，请检查网络连接或 API 配置。", ts: Date.now() });
+        renderChat();
+      } finally {
+        // 恢复发送按钮状态
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = originalBtnText;
+          sendBtn.style.opacity = '';
+        }
+      }
     });
 
     // masks

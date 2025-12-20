@@ -456,7 +456,7 @@ input{border:0;outline:none}
   font-size:12px;
 }
 
-/* 📤 按钮样式（发送 prompt 接口，参考 YiPet 项目） */
+/* 纸飞机按钮样式（发送 prompt 接口，参考 YiPet 项目） */
 .chatMsgActionBtn--prompt{
   font-size:16px;
   font-weight:500;
