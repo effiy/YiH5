@@ -218,6 +218,17 @@ input{border:0;outline:none}
   font-weight:800;
   font-size:15px;
   line-height:1.35;
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.newsItem__icon{
+  flex:none;
+  font-size:14px;
+  opacity:0.7;
+}
+.newsItem--session{
+  /* 从新闻转换来的会话项样式 */
 }
 .newsTitleLink{
   color:inherit;

@@ -293,6 +293,40 @@
     }
   };
 
+  // 加载已读新闻列表
+  const loadReadNews = () => {
+    try {
+      const raw = localStorage.getItem(NEWS_READ_STORAGE_KEY);
+      if (!raw) return new Set();
+      const obj = JSON.parse(raw);
+      const keys = obj && typeof obj === "object" && Array.isArray(obj.keys) ? obj.keys : [];
+      return new Set(keys.filter((k) => k && String(k).trim()));
+    } catch {
+      return new Set();
+    }
+  };
+
+  // 保存已读新闻列表
+  const saveReadNews = (readNewsSet) => {
+    try {
+      const keys = Array.from(readNewsSet).filter((k) => k && String(k).trim());
+      localStorage.setItem(
+        NEWS_READ_STORAGE_KEY,
+        JSON.stringify({ v: 1, savedAt: Date.now(), keys }),
+      );
+    } catch {
+      // ignore
+    }
+  };
+
+  // 标记新闻为已读
+  const markNewsAsRead = (newsKey) => {
+    if (!newsKey) return;
+    const readNews = loadReadNews();
+    readNews.add(String(newsKey));
+    saveReadNews(readNews);
+  };
+
   const saveChatFoldState = (foldExpanded) => {
     try {
       const map = foldExpanded && typeof foldExpanded === "object" ? foldExpanded : {};
@@ -327,6 +361,7 @@
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
   const APP_VERSION_KEY = "YiH5.appVersion.v1";
   const APP_VERSION_URL = "./version.json";
+  const NEWS_READ_STORAGE_KEY = "YiH5.newsRead.v1";
 
   const getAuthHeaders = () => {
     const token = String(state.auth.token || "").trim();
@@ -750,23 +785,67 @@
     const key = String(n?.key ?? n?._id ?? n?.id ?? link ?? title);
     // 如果新闻已有 sessionId 字段，保留它；否则根据 link 查找对应的会话
     const sessionId = n?.sessionId || null;
-    return { key, title, link, description, sourceName, createdTime, published, tags, sessionId };
+    // 检查是否已读
+    const readNews = loadReadNews();
+    const isRead = readNews.has(key);
+    return { key, title, link, description, sourceName, createdTime, published, tags, sessionId, isRead };
   };
 
   // 统一渲染新闻条目（便于虚拟列表复用）
-  const renderNewsItem = (n) => {
-    const tagBadges = (n.tags || [])
+  // 支持渲染新闻项或会话项（当 fromNews 为 true 时）
+  const renderNewsItem = (item) => {
+    // 如果是会话项（从已读新闻转换来的）
+    if (item.fromNews) {
+      const mutedCls = item.muted ? " is-muted" : "";
+      const displayTitle = (item.pageTitle && item.pageTitle.trim()) || item.title || "未命名会话";
+      const displayDesc = (item.pageDescription && item.pageDescription.trim()) || item.preview || "—";
+      const rawTags = Array.isArray(item.tags) ? item.tags : item.tags ? [item.tags] : [];
+      const normTags = rawTags.map((t) => String(t || "").trim()).filter(Boolean);
+      const displayTags = normTags.length ? normTags : ["无标签"];
+      const tagBadges = displayTags
+        .slice(0, 3)
+        .map((t, idx) => {
+          const colorCls = `is-sessionTag-${idx % 4}`;
+          return `<span class="badge ${colorCls}">${escapeHtml(t)}</span>`;
+        })
+        .join("");
+      const time = fmt.time(item.lastAccessTime || item.lastActiveAt || item.updatedAt);
+      const messageBadge = item.messageCount > 0
+        ? `<span class="badge">消息 ${escapeHtml(String(item.messageCount))}</span>`
+        : `<span class="badge">暂无消息</span>`;
+      
+      return `
+        <article class="newsItem newsItem--session${mutedCls}" data-id="${escapeHtml(item.id || "")}" data-news-key="${escapeHtml(item.newsKey || "")}">
+          <div class="newsItem__title">
+            <span class="newsItem__icon" title="来自新闻">📰</span>
+            ${escapeHtml(displayTitle)}
+          </div>
+          ${displayDesc ? `<div class="newsItem__desc">${escapeHtml(displayDesc)}</div>` : ""}
+          <div class="newsItem__meta">
+            <span class="newsItem__metaText">${escapeHtml(time || "")}</span>
+            <span class="newsItem__tags">${tagBadges}</span>
+          </div>
+          <div class="newsItem__meta" style="margin-top:6px">
+            <span></span>
+            <span class="newsItem__tags">${messageBadge}</span>
+          </div>
+        </article>
+      `;
+    }
+    
+    // 普通新闻项
+    const tagBadges = (item.tags || [])
       .slice(0, 3)
       .map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`)
       .join("");
-    const meta = n.createdTime || n.published || "";
-    const linkPart = n.link
-      ? `<a class="newsTitleLink" href="${escapeHtml(n.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(n.title)}</a>`
-      : `<span class="newsTitleLink">${escapeHtml(n.title)}</span>`;
+    const meta = item.createdTime || item.published || "";
+    const linkPart = item.link
+      ? `<a class="newsTitleLink" href="${escapeHtml(item.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
+      : `<span class="newsTitleLink">${escapeHtml(item.title)}</span>`;
     return `
-      <article class="newsItem" data-key="${escapeHtml(n.key || "")}">
+      <article class="newsItem" data-key="${escapeHtml(item.key || "")}">
         <div class="newsItem__title">${linkPart}</div>
-        ${n.description ? `<div class="newsItem__desc">${escapeHtml(n.description)}</div>` : ""}
+        ${item.description ? `<div class="newsItem__desc">${escapeHtml(item.description)}</div>` : ""}
         <div class="newsItem__meta">
           <span class="newsItem__metaText">${escapeHtml(meta || "")}</span>
           <span class="newsItem__tags">${tagBadges}</span>
@@ -1012,25 +1091,67 @@
     const f = state.news.filter;
     let arr = state.news.items.slice();
 
+    // 分离已读和未读新闻
+    const unreadNews = [];
+    const readNewsWithSessions = [];
+
+    arr.forEach((n) => {
+      // 如果新闻已读且有 sessionId，用会话替换
+      if (n.isRead && n.sessionId) {
+        const session = findSessionById(n.sessionId);
+        if (session) {
+          // 标记会话来自新闻，用于显示图标
+          readNewsWithSessions.push({ ...session, fromNews: true, newsKey: n.key });
+        } else {
+          // 如果找不到会话，仍然不显示已读新闻
+        }
+      } else if (!n.isRead) {
+        // 未读新闻正常显示
+        unreadNews.push(n);
+      }
+      // 已读但没有 sessionId 的新闻不显示
+    });
+
+    // 合并未读新闻和已读新闻对应的会话
+    arr = [...unreadNews, ...readNewsWithSessions];
+
     if (q) {
-      arr = arr.filter((n) => {
-        const hay = `${n.title} ${n.description || ""} ${n.link || ""} ${(n.tags || []).join(" ")}`.toLowerCase();
-        return hay.includes(q);
+      arr = arr.filter((item) => {
+        // 如果是会话（fromNews），搜索会话的标题和描述
+        if (item.fromNews) {
+          const hay = `${item.title || ""} ${item.pageTitle || ""} ${item.preview || ""} ${item.pageDescription || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
+          return hay.includes(q);
+        } else {
+          // 如果是新闻，搜索新闻的标题、描述等
+          const hay = `${item.title} ${item.description || ""} ${item.link || ""} ${(item.tags || []).join(" ")}`.toLowerCase();
+          return hay.includes(q);
+        }
       });
     }
 
-    // 标签筛选：如果选中了标签，新闻必须包含至少一个选中的标签
+    // 标签筛选：如果选中了标签，必须包含至少一个选中的标签
     if (f.selectedTags.length > 0) {
-      arr = arr.filter((n) => {
-        const newsTags = Array.isArray(n.tags) ? n.tags.map((t) => String(t).trim()) : [];
-        return f.selectedTags.some((selectedTag) => newsTags.includes(selectedTag));
+      arr = arr.filter((item) => {
+        const itemTags = Array.isArray(item.tags) ? item.tags.map((t) => String(t).trim()) : [];
+        return f.selectedTags.some((selectedTag) => itemTags.includes(selectedTag));
       });
     }
 
-    // 按创建时间倒序排序
+    // 按创建时间倒序排序（会话使用 lastAccessTime 或 updatedAt）
     arr.sort((a, b) => {
-      const timeA = new Date(a.createdTime || a.published || 0).getTime();
-      const timeB = new Date(b.createdTime || b.published || 0).getTime();
+      let timeA, timeB;
+      if (a.fromNews) {
+        // 会话使用 lastAccessTime 或 updatedAt
+        timeA = new Date(a.lastAccessTime || a.updatedAt || a.createdAt || 0).getTime();
+      } else {
+        // 新闻使用 createdTime 或 published
+        timeA = new Date(a.createdTime || a.published || 0).getTime();
+      }
+      if (b.fromNews) {
+        timeB = new Date(b.lastAccessTime || b.updatedAt || b.createdAt || 0).getTime();
+      } else {
+        timeB = new Date(b.createdTime || b.published || 0).getTime();
+      }
       return timeB - timeA;
     });
     return arr;
@@ -3231,6 +3352,15 @@ ${originalText}
       return;
     }
 
+    // 标记新闻为已读
+    markNewsAsRead(key);
+    // 更新新闻项的 isRead 状态
+    news.isRead = true;
+    const newsInState = state.news.items.find(n => String(n.key) === String(key));
+    if (newsInState) {
+      newsInState.isRead = true;
+    }
+
     // 获取新闻的link作为会话ID（后端会自动将URL转换为MD5）
     const newsLink = String(news.link || "").trim();
     if (!newsLink) {
@@ -4549,9 +4679,21 @@ ${originalText}
       if (ev.target.closest(".newsTitleLink")) {
         return;
       }
-      // 点击新闻项的其他部分，进入新闻聊天
+      // 点击新闻项的其他部分
       const item = ev.target.closest(".newsItem");
       if (!item) return;
+      
+      // 如果是会话项（从已读新闻转换来的），进入会话聊天
+      if (item.classList.contains("newsItem--session")) {
+        const id = item.dataset.id;
+        if (id) {
+          ev.preventDefault();
+          navigateToChat(id);
+          return;
+        }
+      }
+      
+      // 普通新闻项，进入新闻聊天
       const key = item.dataset.key;
       if (!key) return;
       ev.preventDefault();
