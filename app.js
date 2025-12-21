@@ -360,7 +360,6 @@
   const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss&excludeFields=content";
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
   const APP_VERSION_KEY = "YiH5.appVersion.v1";
-  const APP_VERSION_URL = "./version.json";
   const NEWS_READ_STORAGE_KEY = "YiH5.newsRead.v1";
 
   const getAuthHeaders = () => {
@@ -393,107 +392,6 @@
     if (state.view === "chat") fetchFaqs({ force: true });
   };
 
-  // ---------- Auto cache-bust on deploy ----------
-  // 机制：
-  // - 服务器每次部署更新根目录 version.json（cache: no-store 拉取）
-  // - 若版本变化，则把当前 URL 改成 ?v=<version> 并 reload
-  // - index.html 会把 v 参数拼到 styles.css/app.js 上，实现强制更新
-  // - libs/ 下资源不参与强刷；鉴权 token（openAuth/localStorage）不会被清除
-  const pickVersionFromObject = (obj) => {
-    // 与旧逻辑保持兼容：优先使用 v/version，其次才是 current
-    const direct = [obj?.v, obj?.version, obj?.current].map((x) => String(x || "").trim()).filter(Boolean);
-    if (direct.length) return direct[0];
-
-    const rels = Array.isArray(obj?.releases) ? obj.releases : Array.isArray(obj?.history) ? obj.history : [];
-    if (Array.isArray(rels) && rels.length) {
-      for (const r of rels) {
-        const vv = String(r?.version || r?.v || r?.tag || "").trim();
-        if (vv) return vv;
-      }
-    }
-    return "";
-  };
-
-  const parseVersionFromResponse = async (resp) => {
-    const ct = String(resp.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("application/json")) {
-      const obj = await resp.json().catch(() => null);
-      return pickVersionFromObject(obj);
-    }
-    const text = await resp.text().catch(() => "");
-    try {
-      const obj = JSON.parse(text);
-      const v = pickVersionFromObject(obj);
-      if (v) return v;
-    } catch {
-      // ignore
-    }
-    return String(text || "").trim();
-  };
-
-  const normalizeVersionManifest = (raw) => {
-    const obj = raw && typeof raw === "object" ? raw : {};
-    const current = pickVersionFromObject(obj);
-    const generatedAt = String(obj.generatedAt || obj.updatedAt || obj.buildTime || "").trim();
-    let releases = Array.isArray(obj.releases)
-      ? obj.releases
-      : Array.isArray(obj.history)
-        ? obj.history
-        : [];
-
-    releases = (Array.isArray(releases) ? releases : [])
-      .map((r) => {
-        const version = String(r?.version || r?.v || r?.tag || "").trim();
-        const date = String(r?.date || r?.time || r?.publishedAt || "").trim();
-        const title = String(r?.title || r?.name || "").trim();
-        const notes = String(r?.notes || r?.note || r?.body || "").trim();
-        const changesRaw = Array.isArray(r?.changes) ? r.changes : Array.isArray(r?.items) ? r.items : [];
-        const changes = (Array.isArray(changesRaw) ? changesRaw : [])
-          .map((c) => {
-            if (typeof c === "string") return { type: "变更", text: c };
-            const type = String(c?.type || c?.kind || "变更").trim() || "变更";
-            const text = String(c?.text || c?.content || c?.desc || "").trim();
-            return text ? { type, text } : null;
-          })
-          .filter(Boolean);
-        return version ? { version, date, title, notes, changes } : null;
-      })
-      .filter(Boolean);
-
-    // 兜底：只有 current 但没有 releases，也能展示一条记录
-    if (current && releases.length === 0) {
-      releases = [{ version: current, date: "", title: "发布记录", notes: "", changes: [] }];
-    }
-
-    // 兜底：current 不在 releases 第一条时，补一条到最前（方便用户看到“当前版本”）
-    if (current && releases.length) {
-      const has = releases.some((r) => String(r.version) === String(current));
-      if (!has) releases.unshift({ version: current, date: "", title: "当前版本", notes: "", changes: [] });
-    }
-
-    return { current, generatedAt, releases };
-  };
-
-  const fetchVersionManifest = async () => {
-    // file:// 或某些 WebView 环境可能无法 fetch，本功能自动降级
-    if (!location || !location.protocol || !location.protocol.startsWith("http")) {
-      return normalizeVersionManifest({ v: getStoredAppVersion() || "" });
-    }
-    const resp = await fetch(APP_VERSION_URL, { cache: "no-store" });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const ct = String(resp.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("application/json")) {
-      const obj = await resp.json().catch(() => null);
-      return normalizeVersionManifest(obj);
-    }
-    const text = await resp.text().catch(() => "");
-    try {
-      return normalizeVersionManifest(JSON.parse(text));
-    } catch {
-      return normalizeVersionManifest({ v: String(text || "").trim() });
-    }
-  };
-
   const getStoredAppVersion = () => {
     try {
       return String(localStorage.getItem(APP_VERSION_KEY) || "").trim();
@@ -510,58 +408,10 @@
     }
   };
 
-  const ensureUrlHasVersion = (serverV) => {
-    try {
-      const url = new URL(location.href);
-      const cur = url.searchParams.get("v") || "";
-      if (String(cur) === String(serverV)) return false;
-      url.searchParams.set("v", String(serverV));
-      // 保留 hash（路由）不变
-      location.replace(url.toString());
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  const checkDeployVersionAndReloadIfNeeded = async () => {
-    // file:// 或某些 WebView 环境可能无法 fetch，本功能自动降级为“不强刷”
-    if (!location || !location.protocol || !location.protocol.startsWith("http")) return false;
-    try {
-      const resp = await fetch(APP_VERSION_URL, { cache: "no-store" });
-      if (!resp.ok) return false;
-      const serverV = String(await parseVersionFromResponse(resp)).trim();
-      if (!serverV) return false;
-
-      const stored = getStoredAppVersion();
-      const urlV = (() => {
-        try {
-          return new URLSearchParams(location.search).get("v") || "";
-        } catch {
-          return "";
-        }
-      })();
-
-      // 第一次进入：记录版本但不强制刷新（避免首次加载多一次跳转）
-      if (!stored) {
-        setStoredAppVersion(serverV);
-        // 如果 URL 没带 v，补上有利于后续资源稳定命中该版本
-        if (!urlV) return ensureUrlHasVersion(serverV);
-        return false;
-      }
-
-      // 版本变化：强制换成新 v（触发加载新 styles/app）
-      if (stored !== serverV) {
-        setStoredAppVersion(serverV);
-        return ensureUrlHasVersion(serverV);
-      }
-
-      // 版本没变但 URL 没 v：补上（可减少“偶发旧缓存命中”）
-      if (!urlV) return ensureUrlHasVersion(serverV);
-      return false;
-    } catch {
-      return false;
-    }
+  const fetchVersionManifest = async () => {
+    // 返回空版本信息
+    const stored = getStoredAppVersion() || "";
+    return { current: stored, generatedAt: "", releases: [] };
   };
 
   // 标签排序（本地持久化）
@@ -5537,9 +5387,6 @@ ${originalText}
 
   const init = async () => {
     loadAuthFromStorage();
-    // 部署后自动更新（不影响 libs/，也不会清掉 openAuth 的 token）
-    // 若触发了 location.replace，这里后续逻辑不会继续执行
-    await checkDeployVersionAndReloadIfNeeded();
     setupVisualViewportBottomInset();
     // 恢复折叠展开状态（跨会话/返回仍保留）
     try {
