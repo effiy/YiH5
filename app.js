@@ -2956,23 +2956,57 @@ ${originalText}
       const deleteBtn = e.target.closest('[data-action="delete"]');
       if (deleteBtn) {
         e.stopPropagation();
+        e.preventDefault();
+        
+        // 防止重复点击
+        if (deleteBtn.disabled || deleteBtn.dataset.deleting === 'true') {
+          return;
+        }
+        
         const msgDiv = deleteBtn.closest('.chatMsg');
         if (!msgDiv) return;
 
         const msgIndex = parseInt(deleteBtn.getAttribute('data-message-index') || '-1');
         const msgs = state.news.chatMessages[state.activeNewsKey] || [];
-        if (msgIndex < 0 || !msgs[msgIndex]) return;
+        
+        if (msgIndex < 0 || !msgs || !msgs[msgIndex]) {
+          console.warn("[YiH5] 删除新闻消息失败：无效的索引", { msgIndex, messagesLength: msgs?.length });
+          showToast('消息索引无效，请刷新页面重试');
+          return;
+        }
 
         // 确认删除
         if (!confirm('确定要删除这条消息吗？')) {
           return;
         }
 
-        // 删除消息
-        msgs.splice(msgIndex, 1);
-        
-        // 重新渲染
-        renderNewsChat();
+        // 标记为正在删除，防止重复点击
+        deleteBtn.disabled = true;
+        deleteBtn.dataset.deleting = 'true';
+        const originalHTML = deleteBtn.innerHTML;
+        deleteBtn.innerHTML = '...';
+        deleteBtn.style.opacity = '0.5';
+
+        try {
+          // 删除消息
+          msgs.splice(msgIndex, 1);
+          
+          // 重新渲染
+          renderNewsChat();
+          
+          showToast('消息已删除');
+        } catch (error) {
+          console.error("[YiH5] 删除新闻消息时发生错误", error);
+          showToast('删除消息时发生错误：' + (error.message || '未知错误'));
+        } finally {
+          // 恢复按钮状态（如果消息还在）
+          if (deleteBtn.isConnected) {
+            deleteBtn.disabled = false;
+            deleteBtn.dataset.deleting = 'false';
+            deleteBtn.innerHTML = originalHTML;
+            deleteBtn.style.opacity = '';
+          }
+        }
         return;
       }
     };
@@ -3287,9 +3321,14 @@ ${originalText}
   const deleteMessage = async (session, msgIndex, container) => {
     console.log("[YiH5] deleteMessage 调用", { sessionId: session?.id, msgIndex, messagesLength: session?.messages?.length });
     
-    if (!session || !session.messages || msgIndex < 0 || msgIndex >= session.messages.length) {
-      console.warn("[YiH5] 删除消息失败：无效的索引或会话", { msgIndex, messagesLength: session?.messages?.length, sessionId: session?.id });
-      return;
+    if (!session || !session.messages) {
+      console.warn("[YiH5] 删除消息失败：会话或消息数组不存在", { sessionId: session?.id });
+      throw new Error('会话或消息数组不存在');
+    }
+    
+    if (msgIndex < 0 || msgIndex >= session.messages.length) {
+      console.warn("[YiH5] 删除消息失败：无效的索引", { msgIndex, messagesLength: session.messages.length, sessionId: session.id });
+      throw new Error(`无效的消息索引: ${msgIndex}，消息总数: ${session.messages.length}`);
     }
 
     // 获取所有消息元素
@@ -3297,16 +3336,23 @@ ${originalText}
     console.log("[YiH5] DOM 消息数量", { domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
     
     if (msgIndex >= allMessages.length) {
-      console.warn("[YiH5] 删除消息失败：DOM 元素数量不匹配", { msgIndex, domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
-      // 如果 DOM 和数组不匹配，重新渲染
+      console.warn("[YiH5] 删除消息失败：DOM 元素数量不匹配，尝试重新渲染", { msgIndex, domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
+      // 如果 DOM 和数组不匹配，先尝试从数组中删除，然后重新渲染
+      session.messages.splice(msgIndex, 1);
+      session.messageCount = session.messages.length;
+      session.updatedAt = Date.now();
       renderChat();
-      return;
+      throw new Error('DOM 元素数量不匹配，已重新渲染');
     }
 
     const msgDiv = allMessages[msgIndex];
     if (!msgDiv) {
       console.warn("[YiH5] 删除消息失败：找不到 DOM 元素", { msgIndex });
-      return;
+      // 即使找不到DOM元素，也尝试从数组中删除
+      session.messages.splice(msgIndex, 1);
+      session.messageCount = session.messages.length;
+      session.updatedAt = Date.now();
+      throw new Error('找不到 DOM 元素，已从数组中删除');
     }
 
     // 保存当前滚动位置
