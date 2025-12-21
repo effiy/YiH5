@@ -218,8 +218,6 @@ input{border:0;outline:none}
   font-weight:800;
   font-size:15px;
   line-height:1.35;
-  display:flex;
-  align-items:center;
   gap:6px;
 }
 .newsItem__icon{
