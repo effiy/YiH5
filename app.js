@@ -1017,12 +1017,11 @@
       // 为每个新闻检查是否已有对应的会话
       items.forEach(newsItem => {
         if (newsItem.link) {
-          // 使用新闻的 link 作为会话ID查找对应的会话
-          const sessionId = newsItem.link;
-          const existingSession = findSessionById(sessionId);
+          // 使用新闻的 link 通过URL查找对应的会话
+          const existingSession = findSessionByUrl(newsItem.link);
           if (existingSession) {
-            // 如果找到会话，设置 sessionId 字段
-            newsItem.sessionId = sessionId;
+            // 如果找到会话，设置 sessionId 字段为会话的实际ID
+            newsItem.sessionId = String(existingSession.id);
           }
         }
       });
@@ -1094,22 +1093,42 @@
     // 分离已读和未读新闻
     const unreadNews = [];
     const readNewsWithSessions = [];
+    const addedSessionIds = new Set(); // 用于去重，避免同一会话重复显示
 
     arr.forEach((n) => {
-      // 如果新闻已读且有 sessionId，用会话替换
-      if (n.isRead && n.sessionId) {
-        const session = findSessionById(n.sessionId);
+      // 先检查新闻是否有对应的会话（无论是否已读）
+      let session = null;
+      let sessionIdToCheck = null;
+      // 优先使用 sessionId 查找
+      if (n.sessionId) {
+        session = findSessionById(n.sessionId);
         if (session) {
-          // 标记会话来自新闻，用于显示图标
-          readNewsWithSessions.push({ ...session, fromNews: true, newsKey: n.key });
-        } else {
-          // 如果找不到会话，仍然不显示已读新闻
+          sessionIdToCheck = n.sessionId;
         }
-      } else if (!n.isRead) {
-        // 未读新闻正常显示
-        unreadNews.push(n);
       }
-      // 已读但没有 sessionId 的新闻不显示
+      // 如果通过 sessionId 找不到，尝试使用 link 通过URL查找
+      if (!session && n.link) {
+        session = findSessionByUrl(n.link);
+        if (session) {
+          // 使用会话的实际ID作为标识
+          sessionIdToCheck = String(session.id);
+        }
+      }
+
+      // 如果找到会话，显示会话（不显示新闻本身）
+      if (session && sessionIdToCheck && !addedSessionIds.has(String(sessionIdToCheck))) {
+        // 标记会话来自新闻，用于显示图标
+        readNewsWithSessions.push({ ...session, fromNews: true, newsKey: n.key });
+        addedSessionIds.add(String(sessionIdToCheck));
+      } else {
+        // 如果没有会话，根据已读状态决定是否显示新闻
+        const isRead = n.isRead === true;
+        if (!isRead) {
+          // 未读且没有会话的新闻正常显示
+          unreadNews.push(n);
+        }
+        // 已读且没有会话的新闻不显示
+      }
     });
 
     // 合并未读新闻和已读新闻对应的会话
@@ -2288,6 +2307,18 @@ ${originalText}
   };
 
   const findSessionById = (id) => state.sessions.find((s) => String(s.id) === String(id));
+  
+  // 通过URL查找会话（用于新闻关联）
+  const findSessionByUrl = (url) => {
+    if (!url) return null;
+    const urlStr = String(url).trim();
+    // 先通过id查找（可能id就是url）
+    let session = findSessionById(urlStr);
+    if (session) return session;
+    // 再通过url字段查找
+    session = state.sessions.find((s) => String(s.url || "").trim() === urlStr);
+    return session || null;
+  };
 
   const findNewsByKey = (key) => state.news.items.find((n) => String(n.key) === String(key));
 
@@ -2727,18 +2758,59 @@ ${originalText}
       const deleteBtn = e.target.closest('[data-action="delete"]');
       if (deleteBtn) {
         e.stopPropagation();
+        e.preventDefault();
+        
+        // 防止重复点击
+        if (deleteBtn.disabled || deleteBtn.dataset.deleting === 'true') {
+          return;
+        }
+        
         const msgDiv = deleteBtn.closest('.chatMsg');
         if (!msgDiv) return;
 
+        // 重新获取最新的会话对象，避免使用闭包中可能过时的引用
+        const currentSession = findSessionById(state.activeSessionId);
+        if (!currentSession) {
+          console.warn("[YiH5] 删除消息失败：找不到当前会话", { activeSessionId: state.activeSessionId });
+          showToast('找不到当前会话，请刷新页面重试');
+          return;
+        }
+
         const msgIndex = parseInt(deleteBtn.getAttribute('data-message-index') || '-1');
-        if (msgIndex < 0 || !session.messages || !session.messages[msgIndex]) return;
+        if (msgIndex < 0 || !currentSession.messages || !currentSession.messages[msgIndex]) {
+          console.warn("[YiH5] 删除消息失败：无效的索引", { msgIndex, messagesLength: currentSession.messages?.length, sessionId: currentSession.id });
+          showToast('消息索引无效，请刷新页面重试');
+          return;
+        }
 
         // 确认删除
         if (!confirm('确定要删除这条消息吗？')) {
           return;
         }
 
-        await deleteMessage(session, msgIndex, container);
+        // 标记为正在删除，防止重复点击
+        deleteBtn.disabled = true;
+        deleteBtn.dataset.deleting = 'true';
+        const originalHTML = deleteBtn.innerHTML;
+        deleteBtn.innerHTML = '...';
+        deleteBtn.style.opacity = '0.5';
+
+        try {
+          console.log("[YiH5] 开始删除消息", { msgIndex, sessionId: currentSession.id, messagesLength: currentSession.messages.length });
+          await deleteMessage(currentSession, msgIndex, container);
+          console.log("[YiH5] 删除消息完成", { sessionId: currentSession.id, messagesLength: currentSession.messages.length });
+        } catch (error) {
+          console.error("[YiH5] 删除消息时发生错误", error);
+          showToast('删除消息时发生错误：' + (error.message || '未知错误'));
+        } finally {
+          // 恢复按钮状态（如果消息还在）
+          if (deleteBtn.isConnected) {
+            deleteBtn.disabled = false;
+            deleteBtn.dataset.deleting = 'false';
+            deleteBtn.innerHTML = originalHTML;
+            deleteBtn.style.opacity = '';
+          }
+        }
         return;
       }
     };
@@ -3165,14 +3237,29 @@ ${originalText}
 
   // 删除消息
   const deleteMessage = async (session, msgIndex, container) => {
-    if (!session.messages || msgIndex < 0 || msgIndex >= session.messages.length) return;
+    console.log("[YiH5] deleteMessage 调用", { sessionId: session?.id, msgIndex, messagesLength: session?.messages?.length });
+    
+    if (!session || !session.messages || msgIndex < 0 || msgIndex >= session.messages.length) {
+      console.warn("[YiH5] 删除消息失败：无效的索引或会话", { msgIndex, messagesLength: session?.messages?.length, sessionId: session?.id });
+      return;
+    }
 
     // 获取所有消息元素
     const allMessages = Array.from(container.querySelectorAll('.chatMsg'));
-    if (msgIndex >= allMessages.length) return;
+    console.log("[YiH5] DOM 消息数量", { domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
+    
+    if (msgIndex >= allMessages.length) {
+      console.warn("[YiH5] 删除消息失败：DOM 元素数量不匹配", { msgIndex, domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
+      // 如果 DOM 和数组不匹配，重新渲染
+      renderChat();
+      return;
+    }
 
     const msgDiv = allMessages[msgIndex];
-    if (!msgDiv) return;
+    if (!msgDiv) {
+      console.warn("[YiH5] 删除消息失败：找不到 DOM 元素", { msgIndex });
+      return;
+    }
 
     // 保存当前滚动位置
     const scrollTop = container.scrollTop;
@@ -3180,11 +3267,23 @@ ${originalText}
     const msgHeight = msgDiv.offsetHeight;
 
     // 从数组中删除消息
+    const deletedMessage = session.messages[msgIndex];
     session.messages.splice(msgIndex, 1);
+    console.log("[YiH5] 已从数组中删除消息", { msgIndex, deletedMessageContent: deletedMessage?.content?.substring(0, 50), newMessagesLength: session.messages.length });
 
     // 更新会话信息
     session.messageCount = session.messages.length;
     session.updatedAt = Date.now();
+    
+    // 确保 state.sessions 中的会话对象也被更新
+    const sessionInState = findSessionById(session.id);
+    if (sessionInState && sessionInState !== session) {
+      // 如果 state 中的会话对象和传入的会话对象不同，同步更新
+      sessionInState.messages = session.messages;
+      sessionInState.messageCount = session.messageCount;
+      sessionInState.updatedAt = session.updatedAt;
+      console.log("[YiH5] 已同步更新 state.sessions 中的会话对象");
+    }
 
     // 从DOM中删除消息元素（添加淡出动画）
     msgDiv.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
@@ -3263,15 +3362,21 @@ ${originalText}
 
       if (!resp.ok) {
         console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
+        showToast('消息已删除，但保存到服务器失败');
       } else {
         const data = await resp.json().catch(() => null);
         console.log("[YiH5] 消息删除已保存到后端:", data);
+        showToast('消息已删除');
       }
     } catch (e) {
       console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
+      showToast('消息已删除，但保存到服务器失败');
     }
 
-    showToast('消息已删除');
+    // 更新会话列表（如果当前在会话列表页面）
+    if (state.view === "sessions") {
+      renderList();
+    }
   };
 
   // 更新消息操作按钮的禁用状态
