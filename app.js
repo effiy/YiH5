@@ -681,6 +681,7 @@
   const dom = {
     app: $("#app"),
     topbarLeft: $(".topbar__left"),
+    topbarRight: $(".topbar__right"),
     dateNav: $(".topbar__dateNav"),
     datePicker: $("#datePicker"),
     prevDay: $("#prevDay"),
@@ -757,6 +758,13 @@
     } else {
       dom.app.classList.remove("is-chat");
       unmountChatBackBtn();
+    }
+    
+    // 删除会话按钮：只在会话聊天页显示
+    if (isChat) {
+      mountChatDeleteBtn();
+    } else {
+      unmountChatDeleteBtn();
     }
   };
 
@@ -2304,6 +2312,46 @@ ${originalText}
 
   const unmountChatBackBtn = () => {
     if (chatBackBtnEl?.isConnected) chatBackBtnEl.remove();
+  };
+
+  // 删除会话按钮：只在会话聊天页挂载
+  let chatDeleteBtnEl = null;
+  const ensureChatDeleteBtn = () => {
+    if (chatDeleteBtnEl) return chatDeleteBtnEl;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "iconbtn";
+    btn.setAttribute("aria-label", "删除会话");
+    btn.title = "删除会话";
+    btn.setAttribute("data-action", "deleteSession");
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+      </svg>
+    `;
+    chatDeleteBtnEl = btn;
+    return chatDeleteBtnEl;
+  };
+
+  const mountChatDeleteBtn = () => {
+    if (!dom.topbarRight) return;
+    // 只在会话聊天页面显示，不在新闻聊天页面显示
+    if (state.view === "chat" && state.bottomTab === "sessions") {
+      const btn = ensureChatDeleteBtn();
+      if (!btn.isConnected) {
+        // 插入到刷新按钮之前
+        const refreshBtn = document.getElementById("refreshBtn");
+        if (refreshBtn && refreshBtn.parentNode) {
+          refreshBtn.parentNode.insertBefore(btn, refreshBtn);
+        } else {
+          dom.topbarRight.appendChild(btn);
+        }
+      }
+    }
+  };
+
+  const unmountChatDeleteBtn = () => {
+    if (chatDeleteBtnEl?.isConnected) chatDeleteBtnEl.remove();
   };
 
   const findSessionById = (id) => state.sessions.find((s) => String(s.id) === String(id));
@@ -4375,8 +4423,60 @@ ${originalText}
     }
   };
 
-  const deleteOne = (id) => {
-    state.sessions = state.sessions.filter((x) => x.id !== id);
+  const deleteOne = async (id) => {
+    if (!id) {
+      showToast('会话ID不能为空');
+      return;
+    }
+
+    // 确认删除
+    if (!confirm('确定要删除这个会话吗？删除后无法恢复。')) {
+      return;
+    }
+
+    try {
+      // 调用后端 API 删除会话
+      const response = await fetch(`https://api.effiy.cn/session/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { ...getAuthHeaders() }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `删除失败: HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      const message = result.message || '会话删除成功';
+
+      // 从本地状态中删除会话
+      state.sessions = state.sessions.filter((x) => x.id !== id);
+
+      // 如果当前正在查看被删除的会话，则返回到列表页面
+      if (state.activeSessionId === id) {
+        navigateToList();
+      }
+
+      // 重新渲染列表
+      renderList();
+
+      // 显示成功消息
+      showToast(message);
+
+      // 将删除成功的消息存储到 localStorage，以便刷新页面后也能显示
+      try {
+        const deleteSuccessKey = 'YiH5.deleteSuccess.v1';
+        localStorage.setItem(deleteSuccessKey, JSON.stringify({
+          message: message,
+          timestamp: Date.now()
+        }));
+      } catch (e) {
+        // ignore localStorage errors
+      }
+    } catch (error) {
+      console.error('[YiH5] 删除会话失败:', error);
+      showToast('删除会话失败：' + (error.message || '未知错误'));
+    }
   };
 
   const kv = (k, v) => `<div class="kv"><div class="kv__k">${escapeHtml(k)}</div><div class="kv__v">${escapeHtml(v)}</div></div>`;
@@ -4644,6 +4744,15 @@ ${originalText}
       const chipKey = el.dataset.key;
       const tagValue = el.dataset.tagValue;
       return removeNewsChip(chipKey, tagValue);
+    }
+    if (action === "deleteSession") {
+      // 删除当前会话
+      if (state.activeSessionId) {
+        return deleteOne(state.activeSessionId);
+      } else {
+        showToast('找不到当前会话');
+        return;
+      }
     }
 
   };
@@ -5403,6 +5512,26 @@ ${originalText}
     await fetchSessions();
     // 初次渲染由路由决定
     await setBottomTab("sessions", { persist: false });
+    
+    // 检查并显示删除成功的消息（如果存在）
+    // 延迟显示，确保页面已经渲染完成
+    setTimeout(() => {
+      try {
+        const deleteSuccessKey = 'YiH5.deleteSuccess.v1';
+        const deleteSuccessData = localStorage.getItem(deleteSuccessKey);
+        if (deleteSuccessData) {
+          const data = JSON.parse(deleteSuccessData);
+          // 只显示最近5分钟内的删除成功消息
+          if (Date.now() - data.timestamp < 5 * 60 * 1000) {
+            showToast(data.message);
+          }
+          // 清除已显示的消息
+          localStorage.removeItem(deleteSuccessKey);
+        }
+      } catch (e) {
+        // ignore localStorage errors
+      }
+    }, 500);
   };
 
   window.addEventListener("hashchange", applyRoute);

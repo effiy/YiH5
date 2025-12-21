@@ -96,6 +96,20 @@ export const saveSession = async (sessionData, token) => {
   return await response.json();
 };
 
+export const deleteSession = async (sessionId, token) => {
+  if (!sessionId) {
+    throw new Error("会话ID不能为空");
+  }
+  const response = await fetchWithAuth(
+    `${SESSION_API_URL}${encodeURIComponent(sessionId)}`,
+    {
+      method: "DELETE",
+    },
+    token
+  );
+  return await response.json();
+};
+
 // ---------- 新闻相关 API ----------
 export const fetchNews = async (isoDate, token) => {
   const url = `${NEWS_API_BASE}&isoDate=${encodeURIComponent(isoDate)}`;
