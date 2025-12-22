@@ -2337,11 +2337,11 @@ ${originalText}
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-up" title="上移" ${idx === 0 ? 'disabled' : ''}>⬆️</button>
                 <button class="chatMsgActionBtn chatMsgActionBtn--sort" data-action="move-down" title="下移" ${idx === msgs.length - 1 ? 'disabled' : ''}>⬇️</button>
                 <button class="chatMsgActionBtn" data-action="copy" title="复制">📋</button>
-                <button class="chatMsgActionBtn chatMsgActionBtn--prompt" data-action="send-prompt" title="发送到 AI" data-message-index="${idx}">
+                ${isMe ? `<button class="chatMsgActionBtn chatMsgActionBtn--prompt" data-action="send-prompt" title="发送到 AI" data-message-index="${idx}">
                   <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
-                </button>
+                </button>` : ''}
                 <button class="chatMsgActionBtn chatMsgActionBtn--delete" data-action="delete" title="删除" data-message-index="${idx}">
                   <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 16px; height: 16px; fill: currentColor;">
                     <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
@@ -5430,6 +5430,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
