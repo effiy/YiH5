@@ -5273,10 +5273,27 @@ ${originalText}
 
       const deltaX = swipeState.currentX - swipeState.startX;
       const deltaY = swipeState.currentY - swipeState.startY;
+      const absDeltaX = Math.abs(deltaX);
+      const absDeltaY = Math.abs(deltaY);
 
-      // 判断是否为水平滑动（水平距离大于垂直距离）
+      // 判断是否为水平滑动
+      // 要求：1. 水平移动明显大于垂直移动（至少是垂直移动的1.5倍）
+      //       2. 水平移动至少达到15px
+      //       3. 垂直移动不超过30px（避免滚动时误触发）
       if (!swipeState.isSwiping) {
-        if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+        // 如果垂直移动明显，立即取消滑动状态并重置transform
+        if (absDeltaY > absDeltaX && absDeltaY > 15) {
+          swipeState.isSwiping = false;
+          const item = swipeState.currentWrapper.querySelector('.item');
+          if (item) {
+            item.style.transform = '';
+          }
+          swipeState.currentWrapper = null;
+          return;
+        }
+        
+        // 判断是否为水平滑动：水平移动明显大于垂直移动，且水平移动达到阈值
+        if (absDeltaX > absDeltaY * 1.5 && absDeltaX > 15 && absDeltaY < 30) {
           swipeState.isSwiping = true;
           // 重置其他已滑开的项
           document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
@@ -5288,12 +5305,18 @@ ${originalText}
               }
             }
           });
-        } else if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 10) {
-          // 垂直滑动，取消滑动状态
-          swipeState.isSwiping = false;
-          swipeState.currentWrapper = null;
-          return;
         }
+      }
+
+      // 如果已经开始滑动，但检测到明显的垂直移动，取消滑动
+      if (swipeState.isSwiping && absDeltaY > absDeltaX && absDeltaY > 20) {
+        swipeState.isSwiping = false;
+        const item = swipeState.currentWrapper.querySelector('.item');
+        if (item) {
+          item.style.transform = '';
+        }
+        swipeState.currentWrapper = null;
+        return;
       }
 
       if (swipeState.isSwiping) {
@@ -5350,6 +5373,27 @@ ${originalText}
           resetAllSwipes();
         }
       });
+      
+      // 滚动时自动收起所有滑动项，避免删除按钮闪烁
+      let scrollTimer = null;
+      dom.list.addEventListener('scroll', () => {
+        // 使用防抖，避免频繁触发
+        if (scrollTimer) {
+          clearTimeout(scrollTimer);
+        }
+        scrollTimer = setTimeout(() => {
+          resetAllSwipes();
+          // 如果正在滑动，也取消滑动状态
+          if (swipeState.currentWrapper) {
+            const item = swipeState.currentWrapper.querySelector('.item');
+            if (item) {
+              item.style.transform = '';
+            }
+            swipeState.currentWrapper = null;
+            swipeState.isSwiping = false;
+          }
+        }, 50);
+      }, { passive: true });
     }
 
     // 点击会话进入聊天（需要排除删除按钮和收藏按钮）
