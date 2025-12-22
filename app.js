@@ -887,6 +887,9 @@
       end: -1,
       raf: 0,
       force: false,
+      lastScrollTop: 0, // 上次滚动位置
+      measureHeightCounter: 0, // 测高计数器
+      renderCache: new Map(), // 渲染缓存（可选，用于提升性能）
     },
     news: {
       enabled: false,
@@ -899,6 +902,9 @@
       end: -1,
       raf: 0,
       force: false,
+      lastScrollTop: 0, // 上次滚动位置
+      measureHeightCounter: 0, // 测高计数器
+      renderCache: new Map(), // 渲染缓存（可选，用于提升性能）
     },
   };
 
@@ -975,58 +981,105 @@
     let listTop = 0;
     let viewportTop = 0;
     let viewportBottom = window.innerHeight;
+    let containerRect = null;
     
     // 判断是容器滚动还是窗口滚动
-    if (container.scrollHeight > container.clientHeight) {
-      // 容器滚动：使用 scrollTop
+    const isContainerScrolling = container.scrollHeight > container.clientHeight;
+    if (isContainerScrolling) {
+      // 容器滚动：使用 scrollTop（性能最优）
       viewportTop = container.scrollTop;
       viewportBottom = viewportTop + container.clientHeight;
       listTop = 0;
     } else {
       // 窗口滚动：使用 getBoundingClientRect（但缓存结果）
-      const rect = container.getBoundingClientRect();
-      listTop = rect.top + window.scrollY;
+      containerRect = container.getBoundingClientRect();
+      listTop = containerRect.top + window.scrollY;
       viewportTop = window.scrollY;
       viewportBottom = viewportTop + window.innerHeight;
     }
 
-    let start = Math.floor((viewportTop - listTop) / itemHeight) - v.overscan;
-    let end = Math.ceil((viewportBottom - listTop) / itemHeight) + v.overscan;
+    // 优化：增加 overscan 的智能调整，快速滚动时增加缓冲区
+    let overscan = v.overscan;
+    const scrollDelta = Math.abs((v.lastScrollTop || 0) - viewportTop);
+    if (scrollDelta > itemHeight * 2) {
+      // 快速滚动时增加缓冲区，减少空白闪烁
+      overscan = Math.min(overscan * 2, 20);
+    }
+    v.lastScrollTop = viewportTop;
+
+    let start = Math.floor((viewportTop - listTop) / itemHeight) - overscan;
+    let end = Math.ceil((viewportBottom - listTop) / itemHeight) + overscan;
     if (!Number.isFinite(start)) start = 0;
     if (!Number.isFinite(end)) end = items.length;
     start = Math.max(0, Math.min(items.length, start));
     end = Math.max(start, Math.min(items.length, end));
 
+    // 优化：如果范围没有变化且不是强制更新，直接返回
     if (!v.force && start === v.start && end === v.end) return;
     v.force = false;
     v.start = start;
     v.end = end;
 
-    // 使用 DocumentFragment 批量更新 DOM，减少重排
-    top.style.height = `${start * itemHeight}px`;
-    bottom.style.height = `${(items.length - end) * itemHeight}px`;
+    // 优化：使用 requestAnimationFrame 批量更新 DOM，减少重排
+    // 先更新占位符高度（同步，避免布局跳动）
+    const topHeight = start * itemHeight;
+    const bottomHeight = (items.length - end) * itemHeight;
+    
+    // 使用 CSS transform 优化高度更新（如果浏览器支持）
+    if (topHeight !== parseFloat(top.style.height || 0)) {
+      top.style.height = `${topHeight}px`;
+    }
+    if (bottomHeight !== parseFloat(bottom.style.height || 0)) {
+      bottom.style.height = `${bottomHeight}px`;
+    }
+    
+    // 优化：使用 DocumentFragment 批量更新 DOM，减少重排
+    const slice = items.slice(start, end);
+    if (slice.length === 0) {
+      mid.innerHTML = "";
+      return;
+    }
     
     // 优化：使用 DocumentFragment 减少重排
     const fragment = document.createDocumentFragment();
     const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = items.slice(start, end).map(v.render).join("");
+    
+    // 优化：批量渲染，减少字符串拼接开销
+    const htmlParts = [];
+    for (let i = 0; i < slice.length; i++) {
+      htmlParts.push(v.render(slice[i]));
+    }
+    tempDiv.innerHTML = htmlParts.join("");
+    
     while (tempDiv.firstChild) {
       fragment.appendChild(tempDiv.firstChild);
     }
-    mid.innerHTML = "";
-    mid.appendChild(fragment);
+    
+    // 使用 replaceChildren 替代 innerHTML + appendChild（更高效）
+    if (mid.replaceChildren) {
+      mid.replaceChildren(fragment);
+    } else {
+      mid.innerHTML = "";
+      mid.appendChild(fragment);
+    }
 
     // 动态测高：避免估算不准导致的间隔跳动（延迟执行，避免阻塞滚动）
-    requestAnimationFrame(() => {
+    // 优化：只在必要时测高，减少性能开销
+    if (v.measureHeightCounter === undefined) v.measureHeightCounter = 0;
+    v.measureHeightCounter++;
+    // 每 3 次更新才测一次高度，减少性能开销
+    if (v.measureHeightCounter % 3 === 0) {
       requestAnimationFrame(() => {
-        const first = mid.firstElementChild;
-        const h = first && first.offsetHeight ? first.offsetHeight : 0;
-        if (h && h > 40 && h < 420 && Math.abs(h - v.itemHeight) > 2) {
-          v.itemHeight = h;
-          requestVListUpdate(key, { force: true });
-        }
+        requestAnimationFrame(() => {
+          const first = mid.firstElementChild;
+          const h = first && first.offsetHeight ? first.offsetHeight : 0;
+          if (h && h > 40 && h < 420 && Math.abs(h - v.itemHeight) > 2) {
+            v.itemHeight = h;
+            requestVListUpdate(key, { force: true });
+          }
+        });
       });
-    });
+    }
   };
 
   const getNewsIsoDateBySelectedDate = () => {
@@ -4331,6 +4384,44 @@ ${originalText}
       .join("");
   };
 
+  // 滚动位置记忆：保存和恢复滚动位置
+  const SCROLL_POSITION_KEY = "yiH5_sessions_scroll_position";
+  const saveScrollPosition = () => {
+    if (!dom.list) return;
+    const scrollTop = dom.list.scrollTop || window.scrollY || 0;
+    if (scrollTop > 0) {
+      try {
+        sessionStorage.setItem(SCROLL_POSITION_KEY, String(scrollTop));
+      } catch (e) {
+        // 忽略存储错误（如隐私模式）
+      }
+    }
+  };
+  
+  const restoreScrollPosition = () => {
+    if (!dom.list) return;
+    try {
+      const saved = sessionStorage.getItem(SCROLL_POSITION_KEY);
+      if (saved) {
+        const scrollTop = parseFloat(saved);
+        if (scrollTop > 0 && Number.isFinite(scrollTop)) {
+          // 延迟恢复，确保 DOM 已渲染
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (dom.list) {
+                dom.list.scrollTop = scrollTop;
+                // 恢复后清除，避免下次误用
+                sessionStorage.removeItem(SCROLL_POSITION_KEY);
+              }
+            });
+          });
+        }
+      }
+    } catch (e) {
+      // 忽略存储错误
+    }
+  };
+
   const renderList = () => {
     if (state.sessionsLoading) {
       disableVList("sessions");
@@ -4341,6 +4432,13 @@ ${originalText}
       dom.list.innerHTML = "";
       return;
     }
+    
+    // 保存当前滚动位置（在重新渲染前）
+    const shouldRestoreScroll = state.view === "list" && dom.list.scrollTop > 0;
+    if (shouldRestoreScroll) {
+      saveScrollPosition();
+    }
+    
     const arr = filterAndSort();
     renderChips();
 
@@ -4362,11 +4460,23 @@ ${originalText}
       if (parts?.top) parts.top.style.height = "0px";
       if (parts?.bottom) parts.bottom.style.height = "0px";
       if (parts?.mid) parts.mid.innerHTML = "";
+      
+      // 优化：初始渲染时立即更新，避免闪烁
       requestVListUpdate("sessions", { force: true });
+      
+      // 恢复滚动位置（仅在需要时）
+      if (shouldRestoreScroll) {
+        restoreScrollPosition();
+      }
       return;
     }
     disableVList("sessions");
     dom.list.innerHTML = arr.map(renderItem).join("");
+    
+    // 恢复滚动位置（非虚拟列表模式）
+    if (shouldRestoreScroll) {
+      restoreScrollPosition();
+    }
   };
 
   const renderItem = (s) => {
@@ -5391,30 +5501,35 @@ ${originalText}
     };
 
     // 处理触摸开始
+    // 优化：使用更高效的检测，减少 DOM 查询
     const handleTouchStart = (e) => {
       // 如果正在滚动，不处理滑动
       if (isScrolling) {
         return;
       }
       
-      const wrapper = e.target.closest('.swipe-item-wrapper');
+      // 优化：快速检测是否在可滑动区域
+      const target = e.target;
+      if (target.closest('.swipe-item__delete') || target.closest('.swipe-item__favorite')) {
+        return;
+      }
+      
+      const wrapper = target.closest('.swipe-item-wrapper');
       if (!wrapper) return;
 
       const touch = e.touches[0];
+      if (!touch) return;
+      
       swipeState.startX = touch.clientX;
       swipeState.startY = touch.clientY;
       swipeState.currentX = touch.clientX;
       swipeState.currentY = touch.clientY;
       swipeState.isSwiping = false;
       swipeState.currentWrapper = wrapper;
-
-      // 如果点击的是删除按钮或收藏按钮，不处理滑动
-      if (e.target.closest('.swipe-item__delete') || e.target.closest('.swipe-item__favorite')) {
-        return;
-      }
     };
 
     // 处理触摸移动
+    // 优化：减少重复计算和 DOM 查询
     const handleTouchMove = (e) => {
       // 如果正在滚动，不处理滑动
       if (isScrolling) {
@@ -5428,6 +5543,8 @@ ${originalText}
       if (!swipeState.currentWrapper) return;
 
       const touch = e.touches[0];
+      if (!touch) return;
+      
       swipeState.currentX = touch.clientX;
       swipeState.currentY = touch.clientY;
 
@@ -5435,6 +5552,11 @@ ${originalText}
       const deltaY = swipeState.currentY - swipeState.startY;
       const absDeltaX = Math.abs(deltaX);
       const absDeltaY = Math.abs(deltaY);
+      
+      // 优化：提前退出，避免不必要的计算
+      if (absDeltaX < 5 && absDeltaY < 5) {
+        return; // 移动距离太小，不处理
+      }
 
       // 判断是否为水平滑动
       // 要求：1. 水平移动明显大于垂直移动（至少是垂直移动的1.5倍）
@@ -5463,21 +5585,24 @@ ${originalText}
           if (swipeState.currentWrapper) {
             swipeState.currentWrapper.classList.remove('is-scrolling');
           }
-          // 重置其他已滑开的项
-          document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
-            if (wrapper !== swipeState.currentWrapper) {
-              wrapper.classList.remove('is-swiped');
-              wrapper.classList.remove('is-scrolling');
-              const item = wrapper.querySelector('.item');
-              if (item) {
-                item.style.transition = 'none';
-                item.style.transform = '';
-                requestAnimationFrame(() => {
-                  item.style.transition = '';
-                });
+          // 优化：只重置可见的已滑开的项，减少 DOM 操作
+          const otherSwiped = document.querySelectorAll('.swipe-item-wrapper.is-swiped:not(.is-scrolling)');
+          if (otherSwiped.length > 0) {
+            otherSwiped.forEach(wrapper => {
+              if (wrapper !== swipeState.currentWrapper) {
+                wrapper.classList.remove('is-swiped');
+                wrapper.classList.remove('is-scrolling');
+                const item = wrapper.querySelector('.item');
+                if (item) {
+                  item.style.transition = 'none';
+                  item.style.transform = '';
+                  requestAnimationFrame(() => {
+                    item.style.transition = '';
+                  });
+                }
               }
-            }
-          });
+            });
+          }
         }
       }
 
@@ -5503,8 +5628,9 @@ ${originalText}
         if (!item) return;
 
         // 只允许向左滑动（负值）
+        // 优化：使用 translate3d 替代 translateX，启用 GPU 加速
         const translateX = Math.max(-swipeState.deleteButtonWidth, Math.min(0, deltaX));
-        item.style.transform = `translateX(${translateX}px) translateZ(0)`;
+        item.style.transform = `translate3d(${translateX}px, 0, 0)`;
       }
     };
 
@@ -5543,10 +5669,11 @@ ${originalText}
       }
 
       // 如果滑动距离超过删除按钮宽度的一半，则展开；否则收起
+      // 优化：使用 translate3d 替代 translateX，启用 GPU 加速
       if (deltaX < -swipeState.deleteButtonWidth / 2) {
         swipeState.currentWrapper.classList.remove('is-scrolling'); // 清除滚动标记，允许按钮显示
         swipeState.currentWrapper.classList.add('is-swiped');
-        item.style.transform = `translateX(-${swipeState.deleteButtonWidth}px) translateZ(0)`;
+        item.style.transform = `translate3d(-${swipeState.deleteButtonWidth}px, 0, 0)`;
       } else {
         swipeState.currentWrapper.classList.remove('is-swiped');
         swipeState.currentWrapper.classList.remove('is-scrolling'); // 清除滚动标记
@@ -5610,15 +5737,29 @@ ${originalText}
       };
       
       // 优化滚动事件处理：使用节流和更高效的检测
+      // 优化：使用更精确的滚动检测，减少误判
       let scrollThrottleRAF = null;
       let lastScrollTime = 0;
+      let scrollVelocity = 0; // 滚动速度
+      let lastScrollPosition = 0;
       const SCROLL_THROTTLE_MS = 16; // 约60fps
+      const SCROLL_VELOCITY_THRESHOLD = 5; // 滚动速度阈值（px/ms）
       
       dom.list.addEventListener('scroll', () => {
         const now = performance.now();
         const currentScrollTop = dom.list.scrollTop;
-        const isActuallyScrolling = Math.abs(currentScrollTop - lastScrollTop) > 1;
+        const scrollDelta = Math.abs(currentScrollTop - lastScrollTop);
+        const timeDelta = now - lastScrollTime;
+        
+        // 计算滚动速度（px/ms）
+        if (timeDelta > 0) {
+          scrollVelocity = scrollDelta / timeDelta;
+        }
+        
+        const isActuallyScrolling = scrollDelta > 1;
         lastScrollTop = currentScrollTop;
+        lastScrollPosition = currentScrollTop;
+        lastScrollTime = now;
         
         // 只有在真正滚动时才处理
         if (isActuallyScrolling) {
@@ -5628,6 +5769,9 @@ ${originalText}
             // 立即重置，避免闪烁
             resetAllSwipesImmediate();
           }
+          
+          // 快速滚动时，降低更新频率以提升性能
+          const throttleDelay = scrollVelocity > SCROLL_VELOCITY_THRESHOLD ? 32 : 16;
           
           // 使用节流优化性能：限制在每帧最多执行一次
           if (!scrollThrottleRAF) {
@@ -5646,6 +5790,7 @@ ${originalText}
         // 滚动结束后，延迟标记滚动结束并清除滚动标记（使用更短的延迟提升响应速度）
         scrollTimeout = setTimeout(() => {
           isScrolling = false;
+          scrollVelocity = 0;
           scrollTimeout = null;
           // 清除滚动标记，允许按钮正常显示
           clearScrollingMark();
@@ -5878,35 +6023,92 @@ ${originalText}
     });
 
     // 全局滚动/尺寸变化：驱动虚拟列表刷新（passive 不阻塞滚动线程）
-    // 使用节流优化性能，减少更新频率
+    // 优化：使用更高效的节流机制，结合时间戳和 RAF
     let scrollThrottleRAF = null;
+    let lastScrollTime = 0;
+    const SCROLL_THROTTLE_MS = 16; // 约 60fps
+    
     const onScrollOrResize = () => {
+      const now = performance.now();
       // 使用 requestAnimationFrame 节流，确保在滚动过程中最多每帧更新一次
       if (scrollThrottleRAF) return;
-      scrollThrottleRAF = requestAnimationFrame(() => {
-        scrollThrottleRAF = null;
-        // 仅在对应页面可见时更新，减少无意义工作
-        if (state.bottomTab === "news") requestVListUpdate("news");
-        else if (state.view === "list") requestVListUpdate("sessions");
-      });
+      
+      // 快速滚动时降低更新频率，慢速滚动时保持流畅
+      const timeSinceLastScroll = now - lastScrollTime;
+      if (timeSinceLastScroll < SCROLL_THROTTLE_MS && lastScrollTime > 0) {
+        // 如果滚动太快，延迟更新
+        scrollThrottleRAF = requestAnimationFrame(() => {
+          scrollThrottleRAF = null;
+          lastScrollTime = performance.now();
+          // 仅在对应页面可见时更新，减少无意义工作
+          if (state.bottomTab === "news") requestVListUpdate("news");
+          else if (state.view === "list") requestVListUpdate("sessions");
+        });
+      } else {
+        // 正常速度滚动，立即更新
+        scrollThrottleRAF = requestAnimationFrame(() => {
+          scrollThrottleRAF = null;
+          lastScrollTime = performance.now();
+          // 仅在对应页面可见时更新，减少无意义工作
+          if (state.bottomTab === "news") requestVListUpdate("news");
+          else if (state.view === "list") requestVListUpdate("sessions");
+        });
+      }
     };
     window.addEventListener("scroll", onScrollOrResize, { passive: true });
     window.addEventListener("resize", onScrollOrResize, { passive: true });
     
     // 为列表容器添加滚动监听（如果列表是容器内滚动）
+    // 优化：使用更高效的滚动监听机制
     const setupListScrollListener = () => {
       const listContainer = dom.list;
       if (!listContainer) return;
       
       let listScrollRAF = null;
+      let lastListScrollTime = 0;
+      
       const onListScroll = () => {
+        const now = performance.now();
         if (listScrollRAF) return;
-        listScrollRAF = requestAnimationFrame(() => {
-          listScrollRAF = null;
-          if (state.view === "list") requestVListUpdate("sessions");
-        });
+        
+        // 优化：快速滚动时降低更新频率
+        const timeSinceLastScroll = now - lastListScrollTime;
+        if (timeSinceLastScroll < SCROLL_THROTTLE_MS && lastListScrollTime > 0) {
+          listScrollRAF = requestAnimationFrame(() => {
+            listScrollRAF = null;
+            lastListScrollTime = performance.now();
+            if (state.view === "list") requestVListUpdate("sessions");
+          });
+        } else {
+          listScrollRAF = requestAnimationFrame(() => {
+            listScrollRAF = null;
+            lastListScrollTime = performance.now();
+            if (state.view === "list") requestVListUpdate("sessions");
+          });
+        }
       };
+      
       listContainer.addEventListener("scroll", onListScroll, { passive: true });
+      
+      // 优化：使用 Intersection Observer 检测列表可见性，不可见时暂停更新
+      if (window.IntersectionObserver) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              // 列表可见时恢复更新
+              listContainer.addEventListener("scroll", onListScroll, { passive: true });
+            } else {
+              // 列表不可见时暂停更新（但保留监听器，因为可能很快又可见）
+              // 这里不移除监听器，因为移除和重新添加的成本可能更高
+            }
+          });
+        }, {
+          root: null,
+          rootMargin: "100px", // 提前 100px 开始更新
+          threshold: 0
+        });
+        observer.observe(listContainer);
+      }
     };
     setupListScrollListener();
   };

@@ -877,14 +877,20 @@ input{border:0;outline:none}
   flex-direction:column;
   /* 优化滚动性能 */
   -webkit-overflow-scrolling: touch;
-  /* 启用硬件加速 */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  /* 启用硬件加速：使用 GPU 加速 */
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
   /* 减少滚动时的重绘 */
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   /* 优化合成层 */
   will-change: scroll-position;
+  /* 优化滚动性能：减少滚动时的重排 */
+  contain: layout style paint;
+  /* 平滑滚动（移动端默认关闭，避免性能问题） */
+  scroll-behavior: auto;
+  /* 优化滚动性能：防止滚动穿透 */
+  overscroll-behavior: contain;
 }
 
 /* ---------- 轻量虚拟列表（用于长列表上下滑动优化） ---------- */
@@ -892,22 +898,46 @@ input{border:0;outline:none}
   display:block;
   /* 优化虚拟列表滚动性能 */
   -webkit-overflow-scrolling: touch;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
   will-change: scroll-position;
+  /* 优化滚动性能：减少滚动时的重排 */
+  contain: layout style paint;
+  /* 防止滚动穿透 */
+  overscroll-behavior: contain;
+  /* 优化渲染：使用 GPU 加速 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* 优化滚动性能：减少重绘 */
+  isolation: isolate;
 }
 .vlist__spacer{
   width:100%;
   height:0px;
   /* 优化占位符渲染 */
   contain: strict;
+  /* 优化渲染：使用 GPU 加速 */
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  /* 减少重绘 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* 优化布局性能 */
+  will-change: height;
 }
 .vlist__items{
   display:flex;
   flex-direction:column;
   /* 优化内容区域渲染 */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  /* 优化渲染：使用 GPU 加速 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* 优化布局性能 */
+  contain: layout style paint;
+  /* 减少重绘 */
+  isolation: isolate;
 }
 
 /* 左滑删除容器 */
@@ -918,13 +948,17 @@ input{border:0;outline:none}
   border-bottom:1px solid var(--divider);
   background:#fff;
   content-visibility: auto;
-  contain: content;
+  contain: content layout style;
   contain-intrinsic-size: 84px;
   /* 优化滚动性能 */
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  /* 优化渲染：使用 GPU 加速 */
+  will-change: transform;
+  /* 优化布局性能 */
+  isolation: isolate;
 }
 .swipe-item-wrapper:last-child{border-bottom:0}
 
@@ -945,8 +979,13 @@ input{border:0;outline:none}
   /* 优化渲染性能，避免滚动时闪烁 */
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+  /* 优化：使用 translate3d 启用 GPU 加速 */
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
+  /* 优化触摸性能 */
+  -webkit-tap-highlight-color: transparent;
+  /* 优化布局性能 */
+  contain: layout style;
 }
 .swipe-item-wrapper .item:active{background:#fafafa}
 .swipe-item-wrapper .item.is-muted{opacity:.75}
