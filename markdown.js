@@ -19,13 +19,18 @@ const ensureMarkedConfigured = (escapeHtml, isSafeUrl) => {
       if (!src) return alt ? `<span>${alt}</span>` : "";
       return `<img src="${escapeHtml(src)}" alt="${alt}" loading="lazy" decoding="async" fetchpriority="low"${t} />`;
     };
-    // 外链默认新开
+    // 外链默认新开，只有以 http 开头的网址才渲染为超链接，import- 开头的转换为纯文本
     renderer.link = (href, title, text) => {
-      const url = isSafeUrl(href) ? String(href || "").trim() : "";
+      const urlStr = String(href || "").trim();
       const label = text || href || "";
       const t = title ? ` title="${escapeHtml(title)}"` : "";
-      if (!url) return `<span>${escapeHtml(label)}</span>`;
-      return `<a href="${escapeHtml(url)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
+      // 只有以 http:// 或 https:// 开头的网址才渲染为超链接，import- 开头的转换为纯文本
+      if (!urlStr || 
+          urlStr.startsWith("import-") || 
+          (!urlStr.startsWith("http://") && !urlStr.startsWith("https://"))) {
+        return `<span>${escapeHtml(label)}</span>`;
+      }
+      return `<a href="${escapeHtml(urlStr)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
     };
 
     window.marked.setOptions({
@@ -47,7 +52,28 @@ export const renderMarkdown = (text, escapeHtml, isSafeUrl) => {
   if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
     try {
       ensureMarkedConfigured(escapeHtml, isSafeUrl);
-      return window.marked.parse(raw);
+      let html = window.marked.parse(raw);
+      // 处理渲染后的 HTML：将非 http 开头的链接转换为纯文本
+      if (html) {
+        // 使用临时 DOM 元素来处理链接
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const links = tempDiv.querySelectorAll('a');
+        links.forEach(link => {
+          const href = link.getAttribute('href') || '';
+          const urlStr = String(href).trim();
+          // 只有以 http:// 或 https:// 开头的网址才保留为链接，import- 开头的转换为纯文本
+          if (!urlStr || 
+              urlStr.startsWith("import-") || 
+              (!urlStr.startsWith("http://") && !urlStr.startsWith("https://"))) {
+            // 转换为纯文本节点
+            const textNode = document.createTextNode(link.textContent || href || '');
+            link.parentNode.replaceChild(textNode, link);
+          }
+        });
+        html = tempDiv.innerHTML;
+      }
+      return html;
     } catch (e) {
       console.warn("[YiH5] Markdown 渲染失败，回退纯文本：", e);
     }

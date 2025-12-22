@@ -91,13 +91,18 @@
         if (!src) return alt ? `<span>${alt}</span>` : "";
         return `<img src="${escapeHtml(src)}" alt="${alt}" loading="lazy" decoding="async" fetchpriority="low"${t} />`;
       };
-      // 外链默认新开，避免在 H5 内“跳走”
+      // 外链默认新开，避免在 H5 内"跳走"，只有以 http 开头的网址才渲染为超链接，import- 开头的转换为纯文本
       renderer.link = (href, title, text) => {
-        const url = isSafeUrl(href) ? String(href || "").trim() : "";
+        const urlStr = String(href || "").trim();
         const label = text || href || "";
         const t = title ? ` title="${escapeHtml(title)}"` : "";
-        if (!url) return `<span>${escapeHtml(label)}</span>`;
-        return `<a href="${escapeHtml(url)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
+        // 只有以 http:// 或 https:// 开头的网址才渲染为超链接，import- 开头的转换为纯文本
+        if (!urlStr || 
+            urlStr.startsWith("import-") || 
+            (!urlStr.startsWith("http://") && !urlStr.startsWith("https://"))) {
+          return `<span>${escapeHtml(label)}</span>`;
+        }
+        return `<a href="${escapeHtml(urlStr)}"${t} target="_blank" rel="noopener noreferrer">${label}</a>`;
       };
 
       window.marked.setOptions({
@@ -119,7 +124,28 @@
     if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
       try {
         ensureMarkedConfigured();
-        return window.marked.parse(raw);
+        let html = window.marked.parse(raw);
+        // 处理渲染后的 HTML：将非 http 开头的链接转换为纯文本
+        if (html) {
+          // 使用临时 DOM 元素来处理链接
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = html;
+          const links = tempDiv.querySelectorAll('a');
+          links.forEach(link => {
+            const href = link.getAttribute('href') || '';
+            const urlStr = String(href).trim();
+            // 只有以 http:// 或 https:// 开头的网址才保留为链接，import- 开头的转换为纯文本
+            if (!urlStr || 
+                urlStr.startsWith("import-") || 
+                (!urlStr.startsWith("http://") && !urlStr.startsWith("https://"))) {
+              // 转换为纯文本节点
+              const textNode = document.createTextNode(link.textContent || href || '');
+              link.parentNode.replaceChild(textNode, link);
+            }
+          });
+          html = tempDiv.innerHTML;
+        }
+        return html;
       } catch (e) {
         console.warn("[YiH5] Markdown 渲染失败，回退纯文本：", e);
       }
@@ -4651,16 +4677,38 @@ ${originalText}
 
     try {
       // 找到会话
-      const session = state.sessions.find((s) => String(s.id) === String(id));
+      let session = state.sessions.find((s) => String(s.id) === String(id));
       if (!session) {
         showToast('会话不存在');
         return;
+      }
+
+      // 如果当前正在查看这个会话，确保使用最新的消息数据
+      // 因为用户可能在聊天页面发送了新消息，但还没有保存到后端
+      if (state.activeSessionId === String(id) && state.view === 'chat') {
+        const currentSession = findSessionById(state.activeSessionId);
+        if (currentSession && currentSession === session) {
+          // 是同一个对象引用，消息应该已经是最新的
+          // 但为了确保，我们使用当前会话对象
+          session = currentSession;
+        }
       }
 
       // 切换收藏状态
       const newFavoriteState = !(session.isFavorite || false);
       session.isFavorite = newFavoriteState;
       session.updatedAt = Date.now();
+
+      // 构建消息数据，确保使用最新的消息
+      const messagesForBackend = (session.messages || []).map((m) => {
+        const role = normalizeRole(m);
+        return {
+          type: role === "user" ? "user" : "pet",
+          content: normalizeText(m),
+          timestamp: m.ts || m.timestamp || Date.now(),
+          imageDataUrl: m.imageDataUrl || m.image || undefined,
+        };
+      });
 
       // 调用后端 API 更新会话
       const response = await fetch(`https://api.effiy.cn/session/save`, {
@@ -4671,16 +4719,17 @@ ${originalText}
         },
         body: JSON.stringify({
           id: session.id,
-          url: session.url,
-          title: session.title,
-          pageTitle: session.pageTitle,
-          pageDescription: session.pageDescription,
-          messages: session.messages || [],
-          tags: session.tags || [],
+          url: session.url || "",
+          title: session.title || "",
+          pageTitle: (session.pageTitle && String(session.pageTitle).trim()) || session.title || "",
+          pageDescription: (session.pageDescription && String(session.pageDescription).trim()) || session.preview || "",
+          pageContent: session.pageContent || "",
+          messages: messagesForBackend,
+          tags: Array.isArray(session.tags) ? session.tags : [],
           isFavorite: newFavoriteState,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-          lastAccessTime: session.lastAccessTime || session.lastActiveAt
+          createdAt: session.createdAt || Date.now(),
+          updatedAt: session.updatedAt || Date.now(),
+          lastAccessTime: session.lastAccessTime || session.lastActiveAt || Date.now()
         })
       });
 
@@ -4691,6 +4740,11 @@ ${originalText}
 
       // 重新渲染列表
       renderList();
+      
+      // 如果当前正在查看这个会话，也重新渲染聊天页面
+      if (state.activeSessionId === String(id) && state.view === 'chat') {
+        renderChat();
+      }
       
       // 显示成功消息
       showToast(newFavoriteState ? '已收藏' : '已取消收藏');
