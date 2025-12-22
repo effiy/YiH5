@@ -5,7 +5,7 @@
 
 // ---------- 常量定义 ----------
 export const API_BASE = "https://api.effiy.cn";
-export const NEWS_API_BASE = `${API_BASE}/mongodb/?cname=rss&excludeFields=content`;
+export const NEWS_API_BASE = `${API_BASE}/mongodb/`;
 export const FAQ_API_URL = `${API_BASE}/mongodb/?cname=faqs&orderBy=order&orderType=asc`;
 export const PROMPT_API_URL = `${API_BASE}/prompt/`;
 export const SESSION_API_URL = `${API_BASE}/session/`;
@@ -111,11 +111,102 @@ export const deleteSession = async (sessionId, token) => {
 };
 
 // ---------- 新闻相关 API ----------
-export const fetchNews = async (isoDate, token) => {
-  const url = `${NEWS_API_BASE}&isoDate=${encodeURIComponent(isoDate)}`;
-  const response = await fetchWithAuth(url, {}, token);
-  const result = await response.json();
-  return result;
+// 新闻查询配置（与 YiPet 保持一致）
+const NEWS_PAGE_SIZE = 500; // 单次最多拉取条数
+const NEWS_MAX_PAGES = 10; // 最多翻页次数
+const NEWS_LIST_FIELDS = [
+  'key',
+  'title',
+  'link',
+  'description',
+  'tags',
+  'source_name',
+  'source_url',
+  'published',
+  'published_parsed',
+  'createdTime',
+  'updatedTime',
+];
+
+export const fetchNews = async (isoDate, token, options = {}) => {
+  const pageSize = options.pageSize || NEWS_PAGE_SIZE;
+  const maxPages = options.maxPages || NEWS_MAX_PAGES;
+  
+  // 构建第一页请求参数
+  const params = new URLSearchParams();
+  params.set('cname', 'rss');
+  params.set('isoDate', isoDate);
+  params.set('pageNum', '1');
+  params.set('pageSize', String(pageSize));
+  params.set('orderBy', 'updatedTime');
+  params.set('orderType', 'desc');
+  // 轻量列表：使用 fields 参数指定需要的字段
+  params.set('fields', NEWS_LIST_FIELDS.join(','));
+
+  const firstPageUrl = `${NEWS_API_BASE}?${params.toString()}`;
+  const response = await fetchWithAuth(firstPageUrl, {}, token);
+  const firstResult = await response.json();
+  
+  // 提取第一页数据
+  let newsList = [];
+  let totalPages = 1;
+  
+  // 兼容不同返回结构
+  if (Array.isArray(firstResult)) {
+    newsList = firstResult;
+  } else if (firstResult && firstResult.data && Array.isArray(firstResult.data.list)) {
+    newsList = firstResult.data.list;
+    totalPages = firstResult.data.totalPages || 1;
+  } else if (firstResult && Array.isArray(firstResult.data)) {
+    newsList = firstResult.data;
+  } else if (firstResult && Array.isArray(firstResult.list)) {
+    newsList = firstResult.list;
+  } else if (firstResult && Array.isArray(firstResult.items)) {
+    newsList = firstResult.items;
+  }
+  
+  // 如果有分页信息，最多再拉若干页
+  const pagesToLoad = Math.min(totalPages, maxPages);
+  if (!Array.isArray(firstResult) && pagesToLoad > 1) {
+    for (let page = 2; page <= pagesToLoad; page++) {
+      const p = new URLSearchParams(params);
+      p.set('pageNum', String(page));
+      const pageUrl = `${NEWS_API_BASE}?${p.toString()}`;
+      try {
+        const pageResponse = await fetchWithAuth(pageUrl, {}, token);
+        const pageResult = await pageResponse.json();
+        
+        let pageList = [];
+        if (Array.isArray(pageResult)) {
+          pageList = pageResult;
+        } else if (pageResult && pageResult.data && Array.isArray(pageResult.data.list)) {
+          pageList = pageResult.data.list;
+        } else if (pageResult && Array.isArray(pageResult.data)) {
+          pageList = pageResult.data;
+        } else if (pageResult && Array.isArray(pageResult.list)) {
+          pageList = pageResult.list;
+        }
+        
+        if (pageList.length > 0) {
+          newsList = newsList.concat(pageList);
+        } else {
+          // 如果某一页没有数据，停止继续加载
+          break;
+        }
+      } catch (error) {
+        console.warn(`[YiH5] 获取第 ${page} 页新闻失败:`, error);
+        break;
+      }
+    }
+  }
+  
+  // 返回统一格式
+  return {
+    data: {
+      list: newsList,
+      totalPages: totalPages
+    }
+  };
 };
 
 // ---------- FAQ 相关 API ----------
@@ -208,4 +299,5 @@ export const extractList = (result, listKey = "list") => {
 };
 
 export { handleApiError };
+
 

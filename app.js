@@ -129,6 +129,74 @@
     return escapeHtml(raw).replaceAll("\n", "<br/>");
   };
 
+  // 获取页面图标URL
+  const getPageIconUrl = () => {
+    let iconUrl = '';
+    const linkTags = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+    if (linkTags.length > 0) {
+      iconUrl = linkTags[0].href;
+      if (!iconUrl.startsWith('http')) {
+        iconUrl = new URL(iconUrl, window.location.origin).href;
+      }
+    }
+    if (!iconUrl) {
+      iconUrl = '/favicon.ico';
+      if (!iconUrl.startsWith('http')) {
+        iconUrl = new URL(iconUrl, window.location.origin).href;
+      }
+    }
+    return iconUrl;
+  };
+
+  // 创建欢迎消息HTML
+  const createWelcomeMessageHtml = (session) => {
+    const pageUrl = session.url || window.location.href;
+    const pageDescription = (session.pageDescription && session.pageDescription.trim()) || '';
+
+    let welcomeHtml = `
+      <div class="welcome-message" style="margin-bottom: 10px; padding: 16px; background: linear-gradient(135deg, rgba(78, 205, 196, 0.1), rgba(68, 160, 141, 0.05)); border-radius: 12px; border-left: 3px solid #4ECDC4;">
+        <div style="margin-bottom: 12px;">
+          <div style="font-size: 12px; color: #6B7280; margin-bottom: 4px; font-weight: 500;">🔗 网址</div>
+          <a href="${escapeHtml(pageUrl)}" target="_blank"
+             style="
+               word-break: break-all;
+               color: #2196F3;
+               text-decoration: none;
+               font-size: 13px;
+               display: -webkit-box;
+               -webkit-line-clamp: 2;
+               -webkit-box-orient: vertical;
+               overflow: hidden;
+               max-width: 100%;
+               line-height: 1.6;
+               text-overflow: ellipsis;
+             "
+             title="${escapeHtml(pageUrl)}"
+             onmouseover="this.style.textDecoration='underline'"
+             onmouseout="this.style.textDecoration='none'">
+             ${escapeHtml(pageUrl)}
+          </a>
+        </div>
+    `;
+
+    if (pageDescription && pageDescription.trim().length > 0) {
+      welcomeHtml += `
+        <div style="margin-bottom: 0;">
+          <div style="display: flex; align-items: center; gap: 4px; font-size: 12px; margin-bottom: 4px; font-weight: 500;">
+            <span style="font-size:13px;">📝</span> 页面描述
+          </div>
+          <div style="font-size: 13px; color: #666; border-radius:7px; padding:8px 12px; line-height: 1.7; padding-left:0.5em;">
+            ${renderMarkdown(pageDescription)}
+          </div>
+        </div>
+      `;
+    }
+
+    welcomeHtml += `</div>`;
+
+    return welcomeHtml;
+  };
+
   const replaceMermaidCodeBlocks = (root) => {
     if (!root) return [];
     const codeBlocks = root.querySelectorAll(
@@ -179,12 +247,13 @@
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
+      return `${y}/${m}/${day}`;
     },
     parseYMD(ymd) {
       if (!ymd) return null;
       try {
-        const parts = String(ymd).split("-");
+        // 支持连字符和斜杠两种格式
+        const parts = String(ymd).split(/[-/]/);
         // 更严格的检查：确保 parts 是数组且有 3 个元素
         if (!parts || !Array.isArray(parts) || parts.length !== 3) return null;
         // 确保所有部分都存在且非空（防止访问 null/undefined）
@@ -206,7 +275,11 @@
     addDaysYMD(ymd, delta) {
       const base = this.parseYMD(ymd) || new Date();
       base.setDate(base.getDate() + delta);
-      return this.formatYMD(base);
+      // 统一返回 YYYY-MM-DD 格式（与 YiPet 和新闻查询接口保持一致）
+      const y = base.getFullYear();
+      const m = String(base.getMonth() + 1).padStart(2, "0");
+      const day = String(base.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
     },
     todayYMD() {
       return this.formatYMD(new Date());
@@ -356,8 +429,8 @@
   };
 
   const BOTTOM_TAB_KEY = "YiH5.bottomTab.v1";
-  // 新闻列表不需要全文 content，显式排除以减少返回体/提升加载速度
-  const NEWS_API_BASE = "https://api.effiy.cn/mongodb/?cname=rss&excludeFields=content";
+  // 新闻 API 基础 URL（查询参数在构建请求时动态添加）
+  const NEWS_API_BASE = "https://api.effiy.cn/mongodb/";
   const API_TOKEN_KEY = "YiH5.apiToken.v1";
   const APP_VERSION_KEY = "YiH5.appVersion.v1";
   const NEWS_READ_STORAGE_KEY = "YiH5.newsRead.v1";
@@ -620,16 +693,37 @@
 
   // ---------- News ----------
   const extractNewsList = (result) => {
-    // YiPet: 数据在 result.data.list
-    if (result && result.data && Array.isArray(result.data.list)) return result.data.list;
+    // YiPet: 数据在 result.data.list，同时返回 totalPages
+    if (result && result.data && Array.isArray(result.data.list)) {
+      return {
+        list: result.data.list,
+        totalPages: result.data.totalPages || 1
+      };
+    }
     // 兼容：直接数组
-    if (Array.isArray(result)) return result;
+    if (Array.isArray(result)) {
+      return { list: result, totalPages: 1 };
+    }
     // 兼容：result.data 是数组
-    if (result && Array.isArray(result.data)) return result.data;
+    if (result && Array.isArray(result.data)) {
+      return { list: result.data, totalPages: 1 };
+    }
     // 兼容：其它字段里有 list/items
-    if (result && Array.isArray(result.list)) return result.list;
-    if (result && Array.isArray(result.items)) return result.items;
-    return [];
+    if (result && Array.isArray(result.list)) {
+      return { list: result.list, totalPages: 1 };
+    }
+    if (result && Array.isArray(result.items)) {
+      return { list: result.items, totalPages: 1 };
+    }
+    // 兜底：找第一个数组字段
+    if (result && typeof result === 'object') {
+      for (const k in result) {
+        if (Array.isArray(result[k]) && result[k].length > 0) {
+          return { list: result[k], totalPages: 1 };
+        }
+      }
+    }
+    return { list: [], totalPages: 1 };
   };
 
   const normalizeNewsItem = (n) => {
@@ -661,31 +755,49 @@
       const normTags = rawTags.map((t) => String(t || "").trim()).filter(Boolean);
       const displayTags = normTags.length ? normTags : ["无标签"];
       const tagBadges = displayTags
-        .slice(0, 3)
+        .slice(0, 4)
         .map((t, idx) => {
           const colorCls = `is-sessionTag-${idx % 4}`;
           return `<span class="badge ${colorCls}">${escapeHtml(t)}</span>`;
         })
         .join("");
-      const time = fmt.time(item.lastAccessTime || item.lastActiveAt || item.updatedAt);
+      
+      // 消息数量badge（用于第一行）
       const messageBadge = item.messageCount > 0
         ? `<span class="badge">消息 ${escapeHtml(String(item.messageCount))}</span>`
         : `<span class="badge">暂无消息</span>`;
       
+      // 格式化会话日期：yyyy-MM-dd（与会话列表保持一致）
+      const ts = item.lastAccessTime || item.lastActiveAt || item.updatedAt;
+      let displayDate = "—";
+      if (ts) {
+        const d = new Date(ts);
+        if (!isNaN(d.getTime())) {
+          displayDate = dateUtil.formatYMD(d);
+        }
+      }
+      
       return `
         <article class="newsItem newsItem--session${mutedCls}" data-id="${escapeHtml(item.id || "")}" data-news-key="${escapeHtml(item.newsKey || "")}">
-          <div class="newsItem__title">
-            <span class="newsItem__icon" title="来自新闻">📰</span>
-            ${escapeHtml(displayTitle)}
-          </div>
-          ${displayDesc ? `<div class="newsItem__desc">${escapeHtml(displayDesc)}</div>` : ""}
-          <div class="newsItem__meta">
-            <span class="newsItem__metaText">${escapeHtml(time || "")}</span>
-            <span class="newsItem__tags">${tagBadges}</span>
-          </div>
-          <div class="newsItem__meta" style="margin-top:6px">
-            <span></span>
-            <span class="newsItem__tags">${messageBadge}</span>
+          <div class="item__mid">
+            <div class="item__row1">
+              <div class="item__title">
+                <span class="newsItem__icon" title="来自新闻">📰</span>
+                <span>${escapeHtml(displayTitle)}</span>
+              </div>
+              <div class="item__meta">
+                ${messageBadge}
+              </div>
+            </div>
+            <div class="item__row2">
+              <div class="item__preview">${escapeHtml(displayDesc)}</div>
+            </div>
+            <div class="item__row2" style="margin-top:6px">
+              <div class="item__tags">${tagBadges}</div>
+              <div class="item__meta">
+                <span class="time">${escapeHtml(displayDate)}</span>
+              </div>
+            </div>
           </div>
         </article>
       `;
@@ -693,20 +805,40 @@
     
     // 普通新闻项
     const tagBadges = (item.tags || [])
-      .slice(0, 3)
+      .slice(0, 4)
       .map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`)
       .join("");
-    const meta = item.createdTime || item.published || "";
+    
+    // 格式化新闻日期：yyyy-MM-dd（与会话列表保持一致）
+    let displayDate = "—";
+    if (item.createdTime || item.published) {
+      const ts = item.createdTime || item.published;
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) {
+        displayDate = dateUtil.formatYMD(d);
+      }
+    }
+    
     const linkPart = item.link
       ? `<a class="newsTitleLink" href="${escapeHtml(item.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a>`
       : `<span class="newsTitleLink">${escapeHtml(item.title)}</span>`;
+    
     return `
       <article class="newsItem" data-key="${escapeHtml(item.key || "")}">
-        <div class="newsItem__title">${linkPart}</div>
-        ${item.description ? `<div class="newsItem__desc">${escapeHtml(item.description)}</div>` : ""}
-        <div class="newsItem__meta">
-          <span class="newsItem__metaText">${escapeHtml(meta || "")}</span>
-          <span class="newsItem__tags">${tagBadges}</span>
+          <div class="item__mid">
+            <div class="item__row1">
+              <div class="item__title"><span>${linkPart}</span></div>
+              <div class="item__meta">
+                <span class="time">${escapeHtml(displayDate)}</span>
+              </div>
+            </div>
+          ${item.description ? `<div class="item__row2">
+            <div class="item__preview">${escapeHtml(item.description)}</div>
+          </div>` : ""}
+          <div class="item__row2" style="margin-top:${item.description ? '6px' : '0'}">
+            <div class="item__tags">${tagBadges}</div>
+            <div class="item__meta"></div>
+          </div>
         </div>
       </article>
     `;
@@ -842,7 +974,12 @@
   };
 
   const getNewsIsoDateBySelectedDate = () => {
-    const ymd = state.selectedDate || dateUtil.todayYMD();
+    // 确保日期格式为 YYYY-MM-DD（与 YiPet 保持一致）
+    let ymd = state.selectedDate || dateUtil.todayYMD();
+    // 如果日期格式是 YYYY/MM/DD，转换为 YYYY-MM-DD
+    if (ymd.includes('/')) {
+      ymd = ymd.replace(/\//g, '-');
+    }
     return `${ymd},${ymd}`;
   };
 
@@ -862,12 +999,72 @@
     renderNews();
 
     try {
-      const url = `${NEWS_API_BASE}&isoDate=${encodeURIComponent(isoDate)}`;
-      const resp = await fetch(url, { headers: { ...getAuthHeaders() } });
+      // 配置参数（与 YiPet 保持一致）
+      const pageSize = 500; // 单次最多拉取条数
+      const maxPages = 10; // 最多翻页次数，避免异常数据导致无限拉取
+      const listFields = [
+        'key',
+        'title',
+        'link',
+        'description',
+        'tags',
+        'source_name',
+        'source_url',
+        'published',
+        'published_parsed',
+        'createdTime',
+        'updatedTime',
+      ];
+
+      // 构建第一页请求参数
+      const params = new URLSearchParams();
+      params.set('cname', 'rss');
+      params.set('isoDate', isoDate);
+      params.set('pageNum', '1');
+      params.set('pageSize', String(pageSize));
+      params.set('orderBy', 'updatedTime');
+      params.set('orderType', 'desc');
+      // 轻量列表：使用 fields 参数指定需要的字段
+      params.set('fields', listFields.join(','));
+
+      const firstPageUrl = `${NEWS_API_BASE}?${params.toString()}`;
+      const resp = await fetch(firstPageUrl, { headers: { ...getAuthHeaders() } });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const result = await resp.json();
-      const list = extractNewsList(result);
-      const items = Array.isArray(list) ? list.map(normalizeNewsItem) : [];
+      const firstResult = await resp.json();
+      
+      // 提取第一页数据
+      const extracted = extractNewsList(firstResult);
+      let newsList = extracted.list || [];
+
+      // 如果有分页信息，最多再拉若干页（仍然是轻量字段）
+      const totalPages = Math.min(extracted.totalPages || 1, maxPages);
+      if (!Array.isArray(firstResult) && totalPages > 1) {
+        for (let page = 2; page <= totalPages; page++) {
+          const p = new URLSearchParams(params);
+          p.set('pageNum', String(page));
+          const pageUrl = `${NEWS_API_BASE}?${p.toString()}`;
+          const pageResp = await fetch(pageUrl, { headers: { ...getAuthHeaders() } });
+          if (!pageResp.ok) {
+            console.warn(`[YiH5] 获取第 ${page} 页新闻失败：HTTP ${pageResp.status}`);
+            break;
+          }
+          const pageResult = await pageResp.json();
+          const pageExtracted = extractNewsList(pageResult);
+          if (pageExtracted.list && pageExtracted.list.length > 0) {
+            newsList = newsList.concat(pageExtracted.list);
+          } else {
+            // 如果某一页没有数据，停止继续加载
+            break;
+          }
+        }
+      }
+
+      // 如果仍然没有找到数据，输出警告
+      if (newsList.length === 0) {
+        console.warn('[YiH5] 未能从API返回数据中提取新闻列表');
+      }
+
+      const items = Array.isArray(newsList) ? newsList.map(normalizeNewsItem) : [];
       
       // 加载会话列表，检查哪些新闻已经转换为会话
       await fetchSessions();
@@ -971,6 +1168,12 @@
           // 使用会话的实际ID作为标识
           sessionIdToCheck = String(session.id);
         }
+      }
+
+      // 如果新闻有 sessionId 但找不到会话，清除 sessionId 和 isRead 状态
+      if (n.sessionId && !session) {
+        delete n.sessionId;
+        n.isRead = false;
       }
 
       // 如果找到会话，显示会话（不显示新闻本身）
@@ -2258,13 +2461,31 @@ ${originalText}
 
     const msgs = Array.isArray(s.messages) ? s.messages.filter(m => m != null) : [];
     if (msgs.length === 0) {
-      dom.chatMessages.innerHTML = `<div class="empty" style="background:transparent;box-shadow:none">
-        <div class="empty__icon">🗨️</div>
-        <div class="empty__title">暂无消息</div>
-        <div class="empty__desc">发送一条消息开始聊天</div>
-      </div>`;
+      // 显示欢迎消息
+      const welcomeHtml = createWelcomeMessageHtml(s);
+      dom.chatMessages.innerHTML = `
+        <div class="chatMsg chatMsg--bot" data-welcome-message="true">
+          <div class="chatMsgContentRow">
+            <div class="chatAvatar" aria-hidden="true">AI</div>
+            <div class="chatBubbleWrap">
+              <div class="chatBubble chatBubble--md">${welcomeHtml}</div>
+            </div>
+          </div>
+        </div>
+      `;
     } else {
-      dom.chatMessages.innerHTML = msgs
+      // 在第一条消息前显示欢迎消息
+      const welcomeHtml = createWelcomeMessageHtml(s);
+      dom.chatMessages.innerHTML = `
+        <div class="chatMsg chatMsg--bot" data-welcome-message="true">
+          <div class="chatMsgContentRow">
+            <div class="chatAvatar" aria-hidden="true">AI</div>
+            <div class="chatBubbleWrap">
+              <div class="chatBubble chatBubble--md">${welcomeHtml}</div>
+            </div>
+          </div>
+        </div>
+      ` + msgs
         .map((m, idx) => {
           // 确保消息对象有效
           if (!m || typeof m !== 'object') return '';
@@ -3906,8 +4127,49 @@ ${originalText}
       }
     }
 
-    // 默认按最近互动排序
-    arr.sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+    // 判断是否有筛选条件
+    const hasFilter = q || f.selectedTags.length > 0 || state.selectedDate;
+
+    // 排序逻辑
+    if (!hasFilter) {
+      // 没有筛选条件：按修改时间倒序排序（最新的在前面）
+      arr.sort((a, b) => {
+        const aTime = a.updatedAt || a.lastAccessTime || a.lastActiveAt || a.createdAt || 0;
+        const bTime = b.updatedAt || b.lastAccessTime || b.lastActiveAt || b.createdAt || 0;
+        if (aTime !== bTime) {
+          return bTime - aTime;
+        }
+        // 如果时间相同，按会话ID排序（确保完全稳定）
+        const aId = a.id || '';
+        const bId = b.id || '';
+        return aId.localeCompare(bId);
+      });
+    } else {
+      // 有筛选条件：按文件名排序（与 YiPet 保持一致）
+      arr.sort((a, b) => {
+        // 获取会话的显示标题（文件名）
+        const aTitle = (a.pageTitle || a.title || '').trim();
+        const bTitle = (b.pageTitle || b.title || '').trim();
+        
+        // 按文件名排序（不区分大小写，支持中文和数字）
+        const titleCompare = aTitle.localeCompare(bTitle, 'zh-CN', { numeric: true, sensitivity: 'base' });
+        if (titleCompare !== 0) {
+          return titleCompare;
+        }
+        
+        // 如果文件名相同，按更新时间排序（最新更新的在前）
+        const aTime = a.updatedAt || a.createdAt || 0;
+        const bTime = b.updatedAt || b.createdAt || 0;
+        if (aTime !== bTime) {
+          return bTime - aTime;
+        }
+        
+        // 如果更新时间也相同，按会话ID排序（确保完全稳定）
+        const aId = a.id || '';
+        const bId = b.id || '';
+        return aId.localeCompare(bId);
+      });
+    }
     return arr;
   };
 
@@ -3964,11 +4226,14 @@ ${originalText}
   };
 
   const renderItem = (s) => {
-    const badges = [
+    // 消息数量badge（单独处理，用于第一行）
+    const messageBadge = s.messageCount > 0
+      ? `<span class="badge">消息 ${escapeHtml(String(s.messageCount))}</span>`
+      : `<span class="badge">暂无消息</span>`;
+    
+    // 其他badges（免打扰等，用于第二行）
+    const otherBadges = [
       s.muted ? `<span class="badge">免打扰</span>` : "",
-      s.messageCount > 0
-        ? `<span class="badge">消息 ${escapeHtml(String(s.messageCount))}</span>`
-        : `<span class="badge">暂无消息</span>`,
     ].join("");
 
     const mutedCls = s.muted ? " is-muted" : "";
@@ -3987,27 +4252,47 @@ ${originalText}
         return `<span class="badge ${colorCls}">${escapeHtml(t)}</span>`;
       })
       .join("");
+    
+    // 格式化会话日期：yyyy-MM-dd
+    const ts = s.lastAccessTime || s.lastActiveAt;
+    let displayDate = "—";
+    if (ts) {
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) {
+        displayDate = dateUtil.formatYMD(d);
+      }
+    }
 
     return `
-      <article class="item${mutedCls}" data-id="${s.id}">
-        <div class="item__mid">
-          <div class="item__row1">
-            <div class="item__title">${escapeHtml(displayTitle)}</div>
-            <div class="item__meta">
-              <span class="time">${escapeHtml(fmt.time(s.lastAccessTime || s.lastActiveAt))}</span>
+      <div class="swipe-item-wrapper">
+        <article class="item${mutedCls}" data-id="${s.id}">
+          <div class="item__mid">
+            <div class="item__row1">
+              <div class="item__title"><span>${escapeHtml(displayTitle)}</span></div>
+              <div class="item__meta">
+                ${messageBadge}
+              </div>
+            </div>
+            <div class="item__row2">
+              <div class="item__preview">${escapeHtml(displayDesc)}</div>
+            </div>
+            <div class="item__row2" style="margin-top:6px">
+              <div class="item__tags">${tagBadges}</div>
+              <div class="item__meta">
+                <span class="time">${escapeHtml(displayDate)}</span>
+                ${otherBadges}
+              </div>
             </div>
           </div>
-          <div class="item__row2">
-            <div class="item__preview">${escapeHtml(displayDesc)}</div>
+          <div class="item__right">
           </div>
-          <div class="item__row2" style="margin-top:6px">
-            <div class="item__tags">${tagBadges}</div>
-            <div class="item__meta">${badges}</div>
-          </div>
+        </article>
+        <div class="swipe-item__actions">
+          <button class="swipe-item__delete" data-action="swipeDelete" data-id="${s.id}" aria-label="删除会话">
+            删除
+          </button>
         </div>
-        <div class="item__right">
-        </div>
-      </article>
+      </div>
     `;
   };
 
@@ -4345,8 +4630,23 @@ ${originalText}
       const result = await response.json();
       const message = result.message || '会话删除成功';
 
+      // 在删除会话之前，先获取会话的 URL，用于更新对应新闻的状态
+      const deletedSession = state.sessions.find((s) => String(s.id) === String(id));
+      const sessionUrl = deletedSession?.url;
+
       // 从本地状态中删除会话
       state.sessions = state.sessions.filter((x) => x.id !== id);
+
+      // 如果会话有 URL，清除对应新闻的 sessionId 和 isRead 状态
+      if (sessionUrl) {
+        state.news.items.forEach((newsItem) => {
+          if (newsItem.link === sessionUrl) {
+            // 清除 sessionId 和 isRead 状态
+            delete newsItem.sessionId;
+            newsItem.isRead = false;
+          }
+        });
+      }
 
       // 如果当前正在查看被删除的会话，则返回到列表页面
       if (state.activeSessionId === id) {
@@ -4355,6 +4655,11 @@ ${originalText}
 
       // 重新渲染列表
       renderList();
+      
+      // 如果当前在新闻页面，重新渲染新闻列表
+      if (state.bottomTab === "news") {
+        renderNews();
+      }
 
       // 显示成功消息
       showToast(message);
@@ -4416,7 +4721,11 @@ ${originalText}
 
   // ---------- Date picker presentation ----------
   const DATE_EMPTY_LABEL = "全部日期";
-  const isValidYMD = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
+  const isValidYMD = (s) => {
+    const str = String(s || "").trim();
+    // 支持 YYYY-MM-DD 和 YYYY/MM/DD 两种格式
+    return /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(str) && dateUtil.parseYMD(str) !== null;
+  };
 
   // 原生 input[type="date"] 在为空时很多浏览器会强制显示 yyyy/mm/dd 之类的系统占位。
   // 这里用“空值时切为 text + placeholder”的方式，实现“全部日期”的展示。
@@ -4651,6 +4960,25 @@ ${originalText}
       }
     }
 
+    if (action === "swipeDelete") {
+      // 左滑删除会话
+      ev?.preventDefault?.();
+      ev?.stopPropagation?.();
+      const sessionId = el.dataset.id;
+      if (sessionId) {
+        // 收起滑动状态
+        const wrapper = el.closest('.swipe-item-wrapper');
+        if (wrapper) {
+          wrapper.classList.remove('is-swiped');
+          const item = wrapper.querySelector('.item');
+          if (item) {
+            item.style.transform = '';
+          }
+        }
+        return deleteOne(sessionId);
+      }
+    }
+
   };
 
   const wire = () => {
@@ -4774,12 +5102,156 @@ ${originalText}
     // 图片预览（点击放大 / 长按保存）
     wireImagePreview();
 
-    // 点击会话进入聊天
+    // 左滑删除功能
+    let swipeState = {
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0,
+      isSwiping: false,
+      currentWrapper: null,
+      deleteButtonWidth: 80
+    };
+
+    // 重置所有滑动状态
+    const resetAllSwipes = () => {
+      document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
+        wrapper.classList.remove('is-swiped');
+        const item = wrapper.querySelector('.item');
+        if (item) {
+          item.style.transform = '';
+        }
+      });
+    };
+
+    // 处理触摸开始
+    const handleTouchStart = (e) => {
+      const wrapper = e.target.closest('.swipe-item-wrapper');
+      if (!wrapper) return;
+
+      const touch = e.touches[0];
+      swipeState.startX = touch.clientX;
+      swipeState.startY = touch.clientY;
+      swipeState.currentX = touch.clientX;
+      swipeState.currentY = touch.clientY;
+      swipeState.isSwiping = false;
+      swipeState.currentWrapper = wrapper;
+
+      // 如果点击的是删除按钮，不处理滑动
+      if (e.target.closest('.swipe-item__delete')) {
+        return;
+      }
+    };
+
+    // 处理触摸移动
+    const handleTouchMove = (e) => {
+      if (!swipeState.currentWrapper) return;
+
+      const touch = e.touches[0];
+      swipeState.currentX = touch.clientX;
+      swipeState.currentY = touch.clientY;
+
+      const deltaX = swipeState.currentX - swipeState.startX;
+      const deltaY = swipeState.currentY - swipeState.startY;
+
+      // 判断是否为水平滑动（水平距离大于垂直距离）
+      if (!swipeState.isSwiping) {
+        if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+          swipeState.isSwiping = true;
+          // 重置其他已滑开的项
+          document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
+            if (wrapper !== swipeState.currentWrapper) {
+              wrapper.classList.remove('is-swiped');
+              const item = wrapper.querySelector('.item');
+              if (item) {
+                item.style.transform = '';
+              }
+            }
+          });
+        } else if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 10) {
+          // 垂直滑动，取消滑动状态
+          swipeState.isSwiping = false;
+          swipeState.currentWrapper = null;
+          return;
+        }
+      }
+
+      if (swipeState.isSwiping) {
+        e.preventDefault(); // 防止页面滚动
+
+        const item = swipeState.currentWrapper.querySelector('.item');
+        if (!item) return;
+
+        // 只允许向左滑动（负值）
+        const translateX = Math.max(-swipeState.deleteButtonWidth, Math.min(0, deltaX));
+        item.style.transform = `translateX(${translateX}px)`;
+      }
+    };
+
+    // 处理触摸结束
+    const handleTouchEnd = (e) => {
+      if (!swipeState.currentWrapper || !swipeState.isSwiping) {
+        swipeState.currentWrapper = null;
+        swipeState.isSwiping = false;
+        return;
+      }
+
+      const deltaX = swipeState.currentX - swipeState.startX;
+      const item = swipeState.currentWrapper.querySelector('.item');
+      
+      if (!item) {
+        swipeState.currentWrapper = null;
+        swipeState.isSwiping = false;
+        return;
+      }
+
+      // 如果滑动距离超过删除按钮宽度的一半，则展开；否则收起
+      if (deltaX < -swipeState.deleteButtonWidth / 2) {
+        swipeState.currentWrapper.classList.add('is-swiped');
+        item.style.transform = `translateX(-${swipeState.deleteButtonWidth}px)`;
+      } else {
+        swipeState.currentWrapper.classList.remove('is-swiped');
+        item.style.transform = '';
+      }
+
+      swipeState.currentWrapper = null;
+      swipeState.isSwiping = false;
+    };
+
+    // 绑定触摸事件到列表容器
+    if (dom.list) {
+      dom.list.addEventListener('touchstart', handleTouchStart, { passive: true });
+      dom.list.addEventListener('touchmove', handleTouchMove, { passive: false });
+      dom.list.addEventListener('touchend', handleTouchEnd, { passive: true });
+      
+      // 点击列表外部时收起所有滑动
+      document.addEventListener('touchstart', (e) => {
+        if (!e.target.closest('.swipe-item-wrapper')) {
+          resetAllSwipes();
+        }
+      });
+    }
+
+    // 点击会话进入聊天（需要排除删除按钮）
     dom.list?.addEventListener("click", (ev) => {
+      // 如果点击的是删除按钮，不处理
+      if (ev.target.closest('.swipe-item__delete')) {
+        return;
+      }
+      
       const item = ev.target.closest(".item");
       if (!item) return;
       const id = item.dataset.id;
       if (!id) return;
+      
+      // 如果当前项是滑动状态，先收起再进入聊天
+      const wrapper = item.closest('.swipe-item-wrapper');
+      if (wrapper && wrapper.classList.contains('is-swiped')) {
+        wrapper.classList.remove('is-swiped');
+        item.style.transform = '';
+        return;
+      }
+      
       navigateToChat(id);
     });
 
@@ -5430,6 +5902,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
