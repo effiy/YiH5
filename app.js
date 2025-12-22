@@ -2434,6 +2434,27 @@ ${originalText}
 
   const normalizeText = (m) => String(m?.content ?? m?.text ?? m?.message ?? "").trim();
 
+  // 滚动聊天消息到底部
+  const scrollChatToBottom = (smooth = false) => {
+    if (!dom.chatMessages) return;
+    const scrollToBottom = () => {
+      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    };
+    if (smooth) {
+      dom.chatMessages.scrollTo({
+        top: dom.chatMessages.scrollHeight,
+        behavior: 'smooth'
+      });
+    } else {
+      // 使用多种方式确保滚动成功
+      requestAnimationFrame(() => {
+        scrollToBottom();
+        // 再次确保滚动（处理异步内容加载）
+        setTimeout(scrollToBottom, 0);
+      });
+    }
+  };
+
   const renderChat = () => {
     const s = findSessionById(state.activeSessionId);
     if (!s) {
@@ -2587,13 +2608,13 @@ ${originalText}
     }
 
     // 滚到底
-    requestAnimationFrame(() => {
-      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
-    });
+    scrollChatToBottom();
 
     // Mermaid 渲染（异步，不阻塞首屏）
     setTimeout(() => {
       renderMermaidIn(dom.chatMessages);
+      // Mermaid 渲染完成后再次滚动到底部（内容高度可能变化）
+      scrollChatToBottom();
     }, 0);
 
     // 为消息操作按钮添加事件监听器
@@ -2736,13 +2757,13 @@ ${originalText}
     }
 
     // 滚到底
-    requestAnimationFrame(() => {
-      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
-    });
+    scrollChatToBottom();
 
     // Mermaid 渲染（异步，不阻塞首屏）
     setTimeout(() => {
       renderMermaidIn(dom.chatMessages);
+      // Mermaid 渲染完成后再次滚动到底部（内容高度可能变化）
+      scrollChatToBottom();
     }, 0);
 
     // 为消息操作按钮添加事件监听器（新闻聊天消息操作）
@@ -3407,23 +3428,44 @@ ${originalText}
     console.log("[YiH5] DOM 消息数量", { domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
     
     if (msgIndex >= allMessages.length) {
-      console.warn("[YiH5] 删除消息失败：DOM 元素数量不匹配，尝试重新渲染", { msgIndex, domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
+      console.warn("[YiH5] 删除消息失败：DOM 元素数量不匹配，直接重新渲染", { msgIndex, domMessagesLength: allMessages.length, arrayMessagesLength: session.messages.length });
       // 如果 DOM 和数组不匹配，先尝试从数组中删除，然后重新渲染
       session.messages.splice(msgIndex, 1);
       session.messageCount = session.messages.length;
       session.updatedAt = Date.now();
+      
+      // 确保 state.sessions 中的会话对象也被更新
+      const sessionInState = findSessionById(session.id);
+      if (sessionInState && sessionInState !== session) {
+        sessionInState.messages = session.messages;
+        sessionInState.messageCount = session.messageCount;
+        sessionInState.updatedAt = session.updatedAt;
+      }
+      
+      // 直接重新渲染
       renderChat();
-      throw new Error('DOM 元素数量不匹配，已重新渲染');
+      return;
     }
 
     const msgDiv = allMessages[msgIndex];
     if (!msgDiv) {
-      console.warn("[YiH5] 删除消息失败：找不到 DOM 元素", { msgIndex });
-      // 即使找不到DOM元素，也尝试从数组中删除
+      console.warn("[YiH5] 删除消息失败：找不到 DOM 元素，直接重新渲染", { msgIndex });
+      // 即使找不到DOM元素，也尝试从数组中删除，然后重新渲染
       session.messages.splice(msgIndex, 1);
       session.messageCount = session.messages.length;
       session.updatedAt = Date.now();
-      throw new Error('找不到 DOM 元素，已从数组中删除');
+      
+      // 确保 state.sessions 中的会话对象也被更新
+      const sessionInState = findSessionById(session.id);
+      if (sessionInState && sessionInState !== session) {
+        sessionInState.messages = session.messages;
+        sessionInState.messageCount = session.messageCount;
+        sessionInState.updatedAt = session.updatedAt;
+      }
+      
+      // 直接重新渲染
+      renderChat();
+      return;
     }
 
     // 保存当前滚动位置
@@ -3456,38 +3498,18 @@ ${originalText}
     msgDiv.style.transform = 'translateX(-20px)';
     
     setTimeout(() => {
-      msgDiv.remove();
-
-      // 更新所有消息的 data-message-index 属性
-      const updatedMessages = Array.from(container.querySelectorAll('.chatMsg'));
-      updatedMessages.forEach((msgDiv, index) => {
-        msgDiv.setAttribute('data-message-index', index);
-        // 更新内部的时间操作容器的 data-message-index
-        const timeActions = msgDiv.querySelector('.chatMsgTimeActions');
-        if (timeActions) {
-          timeActions.setAttribute('data-message-index', index);
-        }
-        // 更新所有按钮的 data-message-index
-        const actionButtons = msgDiv.querySelectorAll('[data-message-index]');
-        actionButtons.forEach(btn => {
-          btn.setAttribute('data-message-index', index);
-        });
-      });
-
-      // 更新所有按钮状态
-      updateMessageActionButtons(container);
-
-      // 如果没有消息了，重新渲染以显示空状态
-      if (session.messages.length === 0) {
-        renderChat();
-        return;
-      }
+      // 完全重新渲染聊天界面，确保 DOM 和数组完全同步
+      renderChat();
 
       // 恢复滚动位置（保持相对位置）
+      // 重新渲染后需要重新获取 container，因为 DOM 已经重新创建
       requestAnimationFrame(() => {
-        const newScrollHeight = container.scrollHeight;
-        const scrollDiff = newScrollHeight - scrollHeight;
-        container.scrollTop = Math.max(0, scrollTop + scrollDiff - msgHeight);
+        const chatContainer = dom.chatMessages;
+        if (chatContainer) {
+          const newScrollHeight = chatContainer.scrollHeight;
+          const scrollDiff = newScrollHeight - scrollHeight;
+          chatContainer.scrollTop = Math.max(0, scrollTop + scrollDiff - msgHeight);
+        }
       });
     }, 200);
 
@@ -5306,6 +5328,8 @@ ${originalText}
         // 清空输入框并立即渲染用户消息
         dom.chatInput.value = "";
         renderNewsChat();
+        // 确保消息发送后滚动到底部
+        scrollChatToBottom();
         
         // 添加临时"正在思考..."消息，并禁用发送按钮
         const sendBtn = dom.chatComposer?.querySelector('.chatComposer__btn--send');
@@ -5350,6 +5374,8 @@ ${originalText}
             
             // 重新渲染聊天界面
             renderNewsChat();
+            // 确保 AI 回复后滚动到底部
+            scrollChatToBottom();
           } else {
             // 如果没有回复，移除"正在思考..."消息
             renderNewsChat();
@@ -5374,7 +5400,7 @@ ${originalText}
         return;
       }
       
-      // 处理会话聊天
+      // 处理会话聊天（参考 YiPet 项目，只插入消息，不调用 prompt 接口）
       const s = findSessionById(state.activeSessionId);
       if (!s) return;
       if (!Array.isArray(s.messages)) s.messages = [];
@@ -5391,122 +5417,51 @@ ${originalText}
       // 清空输入框并立即渲染用户消息
       dom.chatInput.value = "";
       renderChat();
+      // 确保消息发送后滚动到底部
+      scrollChatToBottom();
 
-      // 添加临时"正在思考..."消息，并禁用发送按钮
-      const sendBtn = dom.chatComposer?.querySelector('.chatComposer__btn--send');
-      const originalBtnText = sendBtn?.textContent || '发送';
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.textContent = '发送中...';
-        sendBtn.style.opacity = '0.6';
-      }
-
-      const thinkingMessage = { role: "assistant", content: "正在思考...", ts: Date.now() };
-      s.messages.push(thinkingMessage);
-      renderChat();
-
-      // 调用 AI API 获取回复
+      // 保存会话到后端（参考 YiPet 项目，确保消息被保存）
       try {
-        const systemPrompt = '你是一个专业的AI助手，请根据用户提供的消息内容和上下文进行回复。';
-        
-        // 构建用户提示词：只使用当前消息内容和页面上下文，不包含其他消息历史
-        let userPrompt = text;
-
-        // 只添加页面上下文（pageContent），不包含页面描述、页面标题或其他消息历史
-        if (s.pageContent && String(s.pageContent).trim()) {
-          const pageContent = String(s.pageContent).trim();
-          userPrompt += `\n\n## 页面内容：\n\n${pageContent}`;
-        }
-
-        // 调用 prompt 接口（只传递当前消息内容和页面上下文）
-        const aiResponse = await callPromptOnce(systemPrompt, userPrompt);
-
-        // 移除"正在思考..."消息
-        const thinkingIndex = s.messages.findIndex(m => m.content === "正在思考...");
-        if (thinkingIndex >= 0) {
-          s.messages.splice(thinkingIndex, 1);
-        }
-
-        if (aiResponse && aiResponse.trim()) {
-          const aiMessage = {
-            role: 'assistant',
-            content: aiResponse.trim(),
-            ts: Date.now()
+        const messagesForBackend = (s.messages || []).map((m) => {
+          const role = normalizeRole(m);
+          return {
+            type: role === "user" ? "user" : "pet",
+            content: normalizeText(m),
+            timestamp: m.ts || m.timestamp || Date.now(),
+            imageDataUrl: m.imageDataUrl || m.image || undefined,
           };
-          s.messages.push(aiMessage);
-          s.messageCount = s.messages.length;
-          s.lastActiveAt = Date.now();
-          s.lastAccessTime = Date.now();
-          s.updatedAt = Date.now();
+        });
 
-          // 重新渲染聊天界面
-          renderChat();
+        const payload = {
+          id: String(s.id),
+          url: s.url || "",
+          pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
+          pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
+          pageContent: s.pageContent || "",
+          tags: Array.isArray(s.tags) ? s.tags : [],
+          createdAt: s.createdAt || Date.now(),
+          updatedAt: s.updatedAt || Date.now(),
+          lastAccessTime: s.lastAccessTime || Date.now(),
+          messages: messagesForBackend,
+        };
 
-          // 保存会话到后端（参考 YiPet 项目，确保 AI 回复被保存）
-          try {
-            const messagesForBackend = (s.messages || []).map((m) => {
-              const role = normalizeRole(m);
-              return {
-                type: role === "user" ? "user" : "pet",
-                content: normalizeText(m),
-                timestamp: m.ts || m.timestamp || Date.now(),
-                imageDataUrl: m.imageDataUrl || m.image || undefined,
-              };
-            });
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
 
-            const payload = {
-              id: String(s.id),
-              url: s.url || "",
-              pageTitle: (s.pageTitle && String(s.pageTitle).trim()) || s.title || "",
-              pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
-              pageContent: s.pageContent || "",
-              tags: Array.isArray(s.tags) ? s.tags : [],
-              createdAt: s.createdAt || Date.now(),
-              updatedAt: s.updatedAt || Date.now(),
-              lastAccessTime: s.lastAccessTime || Date.now(),
-              messages: messagesForBackend,
-            };
-
-            const resp = await fetch("https://api.effiy.cn/session/save", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                ...getAuthHeaders(),
-              },
-              body: JSON.stringify(payload),
-            });
-
-            if (!resp.ok) {
-              console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
-            } else {
-              const data = await resp.json().catch(() => null);
-              console.log("[YiH5] 消息和 AI 回复已保存到后端:", data);
-            }
-          } catch (e) {
-            console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
-          }
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存会话到后端失败：HTTP", resp.status);
         } else {
-          // AI 回复为空，添加一个提示消息
-          s.messages.push({ role: "assistant", content: "抱歉，AI 回复为空，请稍后重试。", ts: Date.now() });
-          renderChat();
+          const data = await resp.json().catch(() => null);
+          console.log("[YiH5] 消息已保存到后端:", data);
         }
-      } catch (error) {
-        console.error('[YiH5] 获取 AI 回复失败:', error);
-        // 移除"正在思考..."消息
-        const thinkingIndex = s.messages.findIndex(m => m.content === "正在思考...");
-        if (thinkingIndex >= 0) {
-          s.messages.splice(thinkingIndex, 1);
-        }
-        // 添加错误提示消息
-        s.messages.push({ role: "assistant", content: "获取 AI 回复失败，请检查网络连接或 API 配置。", ts: Date.now() });
-        renderChat();
-      } finally {
-        // 恢复发送按钮状态
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          sendBtn.textContent = originalBtnText;
-          sendBtn.style.opacity = '';
-        }
+      } catch (e) {
+        console.warn("[YiH5] 调用 session/save 保存会话失败：", e);
       }
     });
 
@@ -5902,6 +5857,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
