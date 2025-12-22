@@ -920,6 +920,20 @@ input{border:0;outline:none}
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
   will-change: opacity;
+  /* 默认隐藏，只有在滑动时才显示 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+/* 滑动状态时显示按钮 */
+.swipe-item-wrapper.is-swiped .swipe-item__actions{
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 滚动时强制隐藏按钮，避免闪烁 */
+.swipe-item-wrapper.is-scrolling .swipe-item__actions{
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 /* 收藏按钮 */

@@ -5321,10 +5321,17 @@ ${originalText}
       deleteButtonWidth: 160  // 两个按钮宽度：收藏80px + 删除80px
     };
 
+    // 滚动相关变量
+    let scrollRAF = null;
+    let isScrolling = false;
+    let scrollTimeout = null;
+    let lastScrollTop = 0;
+
     // 重置所有滑动状态（带transition）
     const resetAllSwipes = () => {
       document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
         wrapper.classList.remove('is-swiped');
+        wrapper.classList.remove('is-scrolling'); // 清除滚动标记
         const item = wrapper.querySelector('.item');
         if (item) {
           item.style.transform = '';
@@ -5401,10 +5408,15 @@ ${originalText}
         // 判断是否为水平滑动：水平移动明显大于垂直移动，且水平移动达到阈值
         if (absDeltaX > absDeltaY * 1.5 && absDeltaX > 15 && absDeltaY < 30) {
           swipeState.isSwiping = true;
+          // 清除当前项的滚动标记，允许按钮显示
+          if (swipeState.currentWrapper) {
+            swipeState.currentWrapper.classList.remove('is-scrolling');
+          }
           // 重置其他已滑开的项
           document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
             if (wrapper !== swipeState.currentWrapper) {
               wrapper.classList.remove('is-swiped');
+              wrapper.classList.remove('is-scrolling');
               const item = wrapper.querySelector('.item');
               if (item) {
                 item.style.transition = 'none';
@@ -5481,10 +5493,12 @@ ${originalText}
 
       // 如果滑动距离超过删除按钮宽度的一半，则展开；否则收起
       if (deltaX < -swipeState.deleteButtonWidth / 2) {
+        swipeState.currentWrapper.classList.remove('is-scrolling'); // 清除滚动标记，允许按钮显示
         swipeState.currentWrapper.classList.add('is-swiped');
         item.style.transform = `translateX(-${swipeState.deleteButtonWidth}px) translateZ(0)`;
       } else {
         swipeState.currentWrapper.classList.remove('is-swiped');
+        swipeState.currentWrapper.classList.remove('is-scrolling'); // 清除滚动标记
         item.style.transform = '';
       }
 
@@ -5506,15 +5520,11 @@ ${originalText}
       });
       
       // 滚动时自动收起所有滑动项，避免删除按钮闪烁
-      let scrollRAF = null;
-      let isScrolling = false;
-      let scrollTimeout = null;
-      let lastScrollTop = 0;
-      
       // 立即重置所有滑动项（不使用transition，避免闪烁）
       const resetAllSwipesImmediate = () => {
         document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
           wrapper.classList.remove('is-swiped');
+          wrapper.classList.add('is-scrolling'); // 添加滚动标记，强制隐藏按钮
           const item = wrapper.querySelector('.item');
           if (item) {
             // 临时禁用transition，立即重置
@@ -5539,6 +5549,13 @@ ${originalText}
           swipeState.currentWrapper = null;
           swipeState.isSwiping = false;
         }
+      };
+      
+      // 清除滚动标记
+      const clearScrollingMark = () => {
+        document.querySelectorAll('.swipe-item-wrapper.is-scrolling').forEach(wrapper => {
+          wrapper.classList.remove('is-scrolling');
+        });
       };
       
       dom.list.addEventListener('scroll', () => {
@@ -5569,10 +5586,12 @@ ${originalText}
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
         }
-        // 滚动结束后，延迟标记滚动结束
+        // 滚动结束后，延迟标记滚动结束并清除滚动标记
         scrollTimeout = setTimeout(() => {
           isScrolling = false;
           scrollTimeout = null;
+          // 清除滚动标记，允许按钮正常显示
+          clearScrollingMark();
         }, 150);
       }, { passive: true });
     }
