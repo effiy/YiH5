@@ -315,7 +315,12 @@ input{border:0;outline:none}
   padding: 4px 6px calc(120px + var(--safe-bottom));
   overscroll-behavior: contain;
   /* 降低滚动时的重绘影响（尤其长对话） */
-  contain: paint;
+  contain: paint layout style;
+  /* 启用硬件加速，优化滚动性能 */
+  transform: translateZ(0);
+  will-change: scroll-position;
+  /* 平滑滚动（作为后备，JS 可以覆盖） */
+  scroll-behavior: auto;
 }
 
 /* 确保聊天页的输入框固定在屏幕底部且不会被遮挡 */
@@ -334,8 +339,10 @@ input{border:0;outline:none}
   margin: 4px 0;
   /* 长列表滚动性能：对支持 content-visibility 的浏览器提升明显；不支持的会忽略 */
   content-visibility: auto;
-  contain: content;
+  contain: content layout style;
   contain-intrinsic-size: 120px;
+  /* 优化渲染性能 */
+  will-change: contents;
 }
 .chatMsg--bot{ --chat-bubble-bg:#fff; }
 .chatMsg--me{ --chat-bubble-bg:#95ec69; }
@@ -890,6 +897,11 @@ input{border:0;outline:none}
   transition:transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   touch-action:pan-y;
   will-change:transform;
+  /* 优化渲染性能，避免滚动时闪烁 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 .swipe-item-wrapper .item:active{background:#fafafa}
 .swipe-item-wrapper .item.is-muted{opacity:.75}
@@ -904,6 +916,10 @@ input{border:0;outline:none}
   align-items:stretch;
   width:160px;
   z-index:0;
+  /* 优化渲染性能，避免滚动时闪烁 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: opacity;
 }
 
 /* 收藏按钮 */
@@ -925,6 +941,11 @@ input{border:0;outline:none}
   border-right:1px solid rgba(255,255,255,.15);
   user-select:none;
   -webkit-tap-highlight-color:transparent;
+  /* 优化渲染性能，避免滚动时闪烁 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 .swipe-item__favorite:active{
   background:#e6850e;
@@ -954,6 +975,11 @@ input{border:0;outline:none}
   padding:0;
   user-select:none;
   -webkit-tap-highlight-color:transparent;
+  /* 优化渲染性能，避免滚动时闪烁 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 .swipe-item__delete:active{
   background:#e04848;
@@ -961,7 +987,8 @@ input{border:0;outline:none}
 
 /* 滑动状态 */
 .swipe-item-wrapper.is-swiped .item{
-  transform:translateX(-160px);
+  transform:translateX(-160px) translateZ(0);
+  -webkit-transform:translateX(-160px) translateZ(0);
 }
 
 .item{
@@ -1215,6 +1242,7 @@ input{border:0;outline:none}
 .sheet__body{
   padding:12px;
   overflow:auto;
+  overflow-x:hidden;
   -webkit-overflow-scrolling: touch;
 }
 .sheet__footer{
@@ -1368,29 +1396,95 @@ input{border:0;outline:none}
   gap:10px;
   font-size:13px;
   color:#2b2b2b;
+  overflow-x:hidden;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  max-width:100%;
 }
 .contextSection{
   padding:10px 12px;
   border-radius:12px;
   background:#f6f6f6;
   border:1px solid rgba(0,0,0,.06);
+  overflow-x:hidden;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  max-width:100%;
 }
 .contextLabel{
   font-weight:700;
   margin-bottom:4px;
   color:#666;
+  overflow-x:hidden;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  max-width:100%;
 }
 .contextValue{
   line-height:1.5;
   word-break:break-word;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  overflow-x:hidden;
+  max-width:100%;
 }
 .contextLink{
   color:#0a7b40;
   word-break:break-all;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  overflow-x:hidden;
+  max-width:100%;
   text-decoration:none;
 }
 .contextLink:hover{
   text-decoration:underline;
+}
+
+/* 页面上下文和页面描述中的内容禁止横向滚动，自动换行 */
+.contextContent *,
+#contextContent *,
+#pageDescContent *{
+  max-width:100%;
+  overflow-x:hidden;
+  overflow-wrap:break-word;
+  word-wrap:break-word;
+  box-sizing:border-box;
+}
+
+/* 代码块和预格式化文本也要换行 */
+.contextContent pre,
+.contextContent code,
+#contextContent pre,
+#contextContent code,
+#pageDescContent pre,
+#pageDescContent code{
+  white-space:pre-wrap;
+  word-break:break-word;
+  overflow-wrap:break-word;
+  max-width:100%;
+  overflow-x:hidden;
+}
+
+/* 表格也要禁止横向滚动 */
+.contextContent table,
+#contextContent table,
+#pageDescContent table{
+  max-width:100%;
+  table-layout:fixed;
+  word-break:break-word;
+  overflow-wrap:break-word;
+}
+
+.contextContent table td,
+.contextContent table th,
+#contextContent table td,
+#contextContent table th,
+#pageDescContent table td,
+#pageDescContent table th{
+  word-break:break-word;
+  overflow-wrap:break-word;
+  max-width:100%;
 }
 .optionRow{display:flex;flex-wrap:wrap;gap:10px}
 .option{

@@ -2462,23 +2462,57 @@ ${originalText}
 
   const normalizeText = (m) => String(m?.content ?? m?.text ?? m?.message ?? "").trim();
 
-  // 滚动聊天消息到底部
-  const scrollChatToBottom = (smooth = false) => {
+  // 检查用户是否接近底部（阈值：50px）
+  const isNearBottom = (container, threshold = 50) => {
+    if (!container) return true;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    return scrollHeight - scrollTop - clientHeight <= threshold;
+  };
+
+  // 滚动聊天消息到底部（优化版）
+  let scrollTimeout = null;
+  let scrollRAF = null;
+  const scrollChatToBottom = (smooth = false, force = false) => {
     if (!dom.chatMessages) return;
+    
+    // 如果不是强制滚动，且用户不在底部附近，则不自动滚动
+    if (!force && !isNearBottom(dom.chatMessages, 100)) {
+      return;
+    }
+
+    // 清除之前的滚动任务
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = null;
+    }
+    if (scrollRAF) {
+      cancelAnimationFrame(scrollRAF);
+      scrollRAF = null;
+    }
+
     const scrollToBottom = () => {
-      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+      if (!dom.chatMessages) return;
+      const targetScrollTop = dom.chatMessages.scrollHeight;
+      // 使用 scrollTop 直接赋值，性能更好
+      dom.chatMessages.scrollTop = targetScrollTop;
     };
+
     if (smooth) {
+      // 平滑滚动
       dom.chatMessages.scrollTo({
         top: dom.chatMessages.scrollHeight,
         behavior: 'smooth'
       });
     } else {
-      // 使用多种方式确保滚动成功
-      requestAnimationFrame(() => {
+      // 使用 requestAnimationFrame 优化性能
+      scrollRAF = requestAnimationFrame(() => {
         scrollToBottom();
-        // 再次确保滚动（处理异步内容加载）
-        setTimeout(scrollToBottom, 0);
+        // 延迟一次确保异步内容加载后也能滚动到底部
+        scrollTimeout = setTimeout(() => {
+          scrollToBottom();
+          scrollTimeout = null;
+        }, 16); // 约一帧的时间
+        scrollRAF = null;
       });
     }
   };
@@ -2635,7 +2669,7 @@ ${originalText}
         .join("");
     }
 
-    // 滚到底
+    // 滚到底（智能滚动：只在用户接近底部时滚动）
     scrollChatToBottom();
 
     // Mermaid 渲染（异步，不阻塞首屏）
@@ -2784,7 +2818,7 @@ ${originalText}
         .join("");
     }
 
-    // 滚到底
+    // 滚到底（智能滚动：只在用户接近底部时滚动）
     scrollChatToBottom();
 
     // Mermaid 渲染（异步，不阻塞首屏）
@@ -5287,7 +5321,7 @@ ${originalText}
       deleteButtonWidth: 160  // 两个按钮宽度：收藏80px + 删除80px
     };
 
-    // 重置所有滑动状态
+    // 重置所有滑动状态（带transition）
     const resetAllSwipes = () => {
       document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
         wrapper.classList.remove('is-swiped');
@@ -5300,6 +5334,11 @@ ${originalText}
 
     // 处理触摸开始
     const handleTouchStart = (e) => {
+      // 如果正在滚动，不处理滑动
+      if (isScrolling) {
+        return;
+      }
+      
       const wrapper = e.target.closest('.swipe-item-wrapper');
       if (!wrapper) return;
 
@@ -5319,6 +5358,15 @@ ${originalText}
 
     // 处理触摸移动
     const handleTouchMove = (e) => {
+      // 如果正在滚动，不处理滑动
+      if (isScrolling) {
+        if (swipeState.currentWrapper) {
+          swipeState.currentWrapper = null;
+          swipeState.isSwiping = false;
+        }
+        return;
+      }
+      
       if (!swipeState.currentWrapper) return;
 
       const touch = e.touches[0];
@@ -5340,7 +5388,11 @@ ${originalText}
           swipeState.isSwiping = false;
           const item = swipeState.currentWrapper.querySelector('.item');
           if (item) {
+            item.style.transition = 'none';
             item.style.transform = '';
+            requestAnimationFrame(() => {
+              item.style.transition = '';
+            });
           }
           swipeState.currentWrapper = null;
           return;
@@ -5355,7 +5407,11 @@ ${originalText}
               wrapper.classList.remove('is-swiped');
               const item = wrapper.querySelector('.item');
               if (item) {
+                item.style.transition = 'none';
                 item.style.transform = '';
+                requestAnimationFrame(() => {
+                  item.style.transition = '';
+                });
               }
             }
           });
@@ -5367,7 +5423,11 @@ ${originalText}
         swipeState.isSwiping = false;
         const item = swipeState.currentWrapper.querySelector('.item');
         if (item) {
+          item.style.transition = 'none';
           item.style.transform = '';
+          requestAnimationFrame(() => {
+            item.style.transition = '';
+          });
         }
         swipeState.currentWrapper = null;
         return;
@@ -5381,12 +5441,29 @@ ${originalText}
 
         // 只允许向左滑动（负值）
         const translateX = Math.max(-swipeState.deleteButtonWidth, Math.min(0, deltaX));
-        item.style.transform = `translateX(${translateX}px)`;
+        item.style.transform = `translateX(${translateX}px) translateZ(0)`;
       }
     };
 
     // 处理触摸结束
     const handleTouchEnd = (e) => {
+      // 如果正在滚动，不处理滑动
+      if (isScrolling) {
+        if (swipeState.currentWrapper) {
+          const item = swipeState.currentWrapper.querySelector('.item');
+          if (item) {
+            item.style.transition = 'none';
+            item.style.transform = '';
+            requestAnimationFrame(() => {
+              item.style.transition = '';
+            });
+          }
+          swipeState.currentWrapper = null;
+          swipeState.isSwiping = false;
+        }
+        return;
+      }
+      
       if (!swipeState.currentWrapper || !swipeState.isSwiping) {
         swipeState.currentWrapper = null;
         swipeState.isSwiping = false;
@@ -5405,7 +5482,7 @@ ${originalText}
       // 如果滑动距离超过删除按钮宽度的一半，则展开；否则收起
       if (deltaX < -swipeState.deleteButtonWidth / 2) {
         swipeState.currentWrapper.classList.add('is-swiped');
-        item.style.transform = `translateX(-${swipeState.deleteButtonWidth}px)`;
+        item.style.transform = `translateX(-${swipeState.deleteButtonWidth}px) translateZ(0)`;
       } else {
         swipeState.currentWrapper.classList.remove('is-swiped');
         item.style.transform = '';
@@ -5429,24 +5506,74 @@ ${originalText}
       });
       
       // 滚动时自动收起所有滑动项，避免删除按钮闪烁
-      let scrollTimer = null;
-      dom.list.addEventListener('scroll', () => {
-        // 使用防抖，避免频繁触发
-        if (scrollTimer) {
-          clearTimeout(scrollTimer);
-        }
-        scrollTimer = setTimeout(() => {
-          resetAllSwipes();
-          // 如果正在滑动，也取消滑动状态
-          if (swipeState.currentWrapper) {
-            const item = swipeState.currentWrapper.querySelector('.item');
-            if (item) {
-              item.style.transform = '';
-            }
-            swipeState.currentWrapper = null;
-            swipeState.isSwiping = false;
+      let scrollRAF = null;
+      let isScrolling = false;
+      let scrollTimeout = null;
+      let lastScrollTop = 0;
+      
+      // 立即重置所有滑动项（不使用transition，避免闪烁）
+      const resetAllSwipesImmediate = () => {
+        document.querySelectorAll('.swipe-item-wrapper').forEach(wrapper => {
+          wrapper.classList.remove('is-swiped');
+          const item = wrapper.querySelector('.item');
+          if (item) {
+            // 临时禁用transition，立即重置
+            item.style.transition = 'none';
+            item.style.transform = '';
+            // 下一帧恢复transition
+            requestAnimationFrame(() => {
+              item.style.transition = '';
+            });
           }
-        }, 50);
+        });
+        // 如果正在滑动，也取消滑动状态
+        if (swipeState.currentWrapper) {
+          const item = swipeState.currentWrapper.querySelector('.item');
+          if (item) {
+            item.style.transition = 'none';
+            item.style.transform = '';
+            requestAnimationFrame(() => {
+              item.style.transition = '';
+            });
+          }
+          swipeState.currentWrapper = null;
+          swipeState.isSwiping = false;
+        }
+      };
+      
+      dom.list.addEventListener('scroll', () => {
+        const currentScrollTop = dom.list.scrollTop;
+        const isActuallyScrolling = Math.abs(currentScrollTop - lastScrollTop) > 1;
+        lastScrollTop = currentScrollTop;
+        
+        // 只有在真正滚动时才处理
+        if (isActuallyScrolling) {
+          // 标记正在滚动
+          if (!isScrolling) {
+            isScrolling = true;
+            // 立即重置，避免闪烁
+            resetAllSwipesImmediate();
+          }
+          
+          // 使用requestAnimationFrame优化性能
+          if (scrollRAF) {
+            cancelAnimationFrame(scrollRAF);
+          }
+          scrollRAF = requestAnimationFrame(() => {
+            // 确保所有滑动项都已重置
+            resetAllSwipesImmediate();
+          });
+        }
+        
+        // 清除之前的定时器
+        if (scrollTimeout) {
+          clearTimeout(scrollTimeout);
+        }
+        // 滚动结束后，延迟标记滚动结束
+        scrollTimeout = setTimeout(() => {
+          isScrolling = false;
+          scrollTimeout = null;
+        }, 150);
       }, { passive: true });
     }
 
@@ -5521,11 +5648,11 @@ ${originalText}
         const userMessage = { role: "user", content: text, ts: now };
         msgs.push(userMessage);
         
-        // 清空输入框并立即渲染用户消息
-        dom.chatInput.value = "";
-        renderNewsChat();
-        // 确保消息发送后滚动到底部
-        scrollChatToBottom();
+      // 清空输入框并立即渲染用户消息
+      dom.chatInput.value = "";
+      renderNewsChat();
+      // 确保消息发送后滚动到底部（强制滚动）
+      scrollChatToBottom(false, true);
         
         // 添加临时"正在思考..."消息，并禁用发送按钮
         const sendBtn = dom.chatComposer?.querySelector('.chatComposer__btn--send');
@@ -5570,8 +5697,8 @@ ${originalText}
             
             // 重新渲染聊天界面
             renderNewsChat();
-            // 确保 AI 回复后滚动到底部
-            scrollChatToBottom();
+            // 确保 AI 回复后滚动到底部（强制滚动）
+            scrollChatToBottom(false, true);
           } else {
             // 如果没有回复，移除"正在思考..."消息
             renderNewsChat();
@@ -5613,8 +5740,8 @@ ${originalText}
       // 清空输入框并立即渲染用户消息
       dom.chatInput.value = "";
       renderChat();
-      // 确保消息发送后滚动到底部
-      scrollChatToBottom();
+      // 确保消息发送后滚动到底部（强制滚动）
+      scrollChatToBottom(false, true);
 
       // 保存会话到后端（参考 YiPet 项目，确保消息被保存）
       try {
