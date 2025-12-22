@@ -779,14 +779,15 @@
         }
       }
       
+      // 会话标识：和会话列表的爱心收藏一样的布局（直接放在标题前面）
+      const sessionIcon = '<span style="color: #666; margin-right: 4px;" title="来自新闻">📰</span>';
+      const displayTitleWithIcon = sessionIcon + escapeHtml(displayTitle);
+      
       return `
         <article class="newsItem newsItem--session${mutedCls}" data-id="${escapeHtml(item.id || "")}" data-news-key="${escapeHtml(item.newsKey || "")}">
           <div class="item__mid">
             <div class="item__row1">
-              <div class="item__title">
-                <span class="newsItem__icon" title="来自新闻">📰</span>
-                <span>${escapeHtml(displayTitle)}</span>
-              </div>
+              <div class="item__title"><span>${displayTitleWithIcon}</span></div>
               <div class="item__meta">
                 ${messageBadge}
               </div>
