@@ -970,10 +970,25 @@
     }
 
     const itemHeight = Math.max(40, Number(v.itemHeight) || 80);
-    const rect = container.getBoundingClientRect();
-    const listTop = rect.top + window.scrollY;
-    const viewportTop = window.scrollY;
-    const viewportBottom = viewportTop + window.innerHeight;
+    
+    // 优化：对于容器滚动，使用 scrollTop 而不是 getBoundingClientRect（性能更好）
+    let listTop = 0;
+    let viewportTop = 0;
+    let viewportBottom = window.innerHeight;
+    
+    // 判断是容器滚动还是窗口滚动
+    if (container.scrollHeight > container.clientHeight) {
+      // 容器滚动：使用 scrollTop
+      viewportTop = container.scrollTop;
+      viewportBottom = viewportTop + container.clientHeight;
+      listTop = 0;
+    } else {
+      // 窗口滚动：使用 getBoundingClientRect（但缓存结果）
+      const rect = container.getBoundingClientRect();
+      listTop = rect.top + window.scrollY;
+      viewportTop = window.scrollY;
+      viewportBottom = viewportTop + window.innerHeight;
+    }
 
     let start = Math.floor((viewportTop - listTop) / itemHeight) - v.overscan;
     let end = Math.ceil((viewportBottom - listTop) / itemHeight) + v.overscan;
@@ -987,18 +1002,30 @@
     v.start = start;
     v.end = end;
 
+    // 使用 DocumentFragment 批量更新 DOM，减少重排
     top.style.height = `${start * itemHeight}px`;
     bottom.style.height = `${(items.length - end) * itemHeight}px`;
-    mid.innerHTML = items.slice(start, end).map(v.render).join("");
+    
+    // 优化：使用 DocumentFragment 减少重排
+    const fragment = document.createDocumentFragment();
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = items.slice(start, end).map(v.render).join("");
+    while (tempDiv.firstChild) {
+      fragment.appendChild(tempDiv.firstChild);
+    }
+    mid.innerHTML = "";
+    mid.appendChild(fragment);
 
-    // 动态测高：避免估算不准导致的间隔跳动
+    // 动态测高：避免估算不准导致的间隔跳动（延迟执行，避免阻塞滚动）
     requestAnimationFrame(() => {
-      const first = mid.firstElementChild;
-      const h = first && first.offsetHeight ? first.offsetHeight : 0;
-      if (h && h > 40 && h < 420 && Math.abs(h - v.itemHeight) > 2) {
-        v.itemHeight = h;
-        requestVListUpdate(key, { force: true });
-      }
+      requestAnimationFrame(() => {
+        const first = mid.firstElementChild;
+        const h = first && first.offsetHeight ? first.offsetHeight : 0;
+        if (h && h > 40 && h < 420 && Math.abs(h - v.itemHeight) > 2) {
+          v.itemHeight = h;
+          requestVListUpdate(key, { force: true });
+        }
+      });
     });
   };
 
@@ -2094,7 +2121,13 @@ ${originalText}
           return;
         }
 
+        // 更新会话的页面描述
+        s.pageDescription = content;
         s.preview = content;
+        
+        // 重新渲染聊天消息，更新页面描述显示
+        renderChat();
+        
         closePageDescription();
       } catch (e) {
         console.warn("[YiH5] 保存页面描述到后端失败：", e);
@@ -2469,9 +2502,11 @@ ${originalText}
     return scrollHeight - scrollTop - clientHeight <= threshold;
   };
 
-  // 滚动聊天消息到底部（优化版）
+  // 滚动聊天消息到底部（高性能优化版）
   let scrollTimeout = null;
   let scrollRAF = null;
+  let lastScrollHeight = 0;
+  
   const scrollChatToBottom = (smooth = false, force = false) => {
     if (!dom.chatMessages) return;
     
@@ -2493,26 +2528,42 @@ ${originalText}
     const scrollToBottom = () => {
       if (!dom.chatMessages) return;
       const targetScrollTop = dom.chatMessages.scrollHeight;
-      // 使用 scrollTop 直接赋值，性能更好
+      // 如果高度没有变化，跳过滚动（避免不必要的重排）
+      if (targetScrollTop === lastScrollHeight && dom.chatMessages.scrollTop === lastScrollHeight) {
+        return;
+      }
+      lastScrollHeight = targetScrollTop;
+      // 使用 scrollTop 直接赋值，性能最好
       dom.chatMessages.scrollTop = targetScrollTop;
     };
 
     if (smooth) {
-      // 平滑滚动
-      dom.chatMessages.scrollTo({
-        top: dom.chatMessages.scrollHeight,
-        behavior: 'smooth'
-      });
+      // 平滑滚动 - 使用 CSS 的 scroll-behavior，性能更好
+      const currentScrollTop = dom.chatMessages.scrollTop;
+      const targetScrollTop = dom.chatMessages.scrollHeight;
+      // 如果已经在底部附近，不需要滚动
+      if (Math.abs(currentScrollTop - targetScrollTop) < 10) {
+        return;
+      }
+      // 临时启用平滑滚动
+      const originalBehavior = dom.chatMessages.style.scrollBehavior;
+      dom.chatMessages.style.scrollBehavior = 'smooth';
+      dom.chatMessages.scrollTop = targetScrollTop;
+      // 滚动完成后恢复
+      setTimeout(() => {
+        if (dom.chatMessages) {
+          dom.chatMessages.style.scrollBehavior = originalBehavior || '';
+        }
+      }, 500);
     } else {
-      // 使用 requestAnimationFrame 优化性能
+      // 使用 requestAnimationFrame 优化性能，减少重排
       scrollRAF = requestAnimationFrame(() => {
         scrollToBottom();
-        // 延迟一次确保异步内容加载后也能滚动到底部
-        scrollTimeout = setTimeout(() => {
+        // 使用双 RAF 确保异步内容加载后也能滚动到底部
+        scrollRAF = requestAnimationFrame(() => {
           scrollToBottom();
-          scrollTimeout = null;
-        }, 16); // 约一帧的时间
-        scrollRAF = null;
+          scrollRAF = null;
+        });
       });
     }
   };
@@ -5558,7 +5609,13 @@ ${originalText}
         });
       };
       
+      // 优化滚动事件处理：使用节流和更高效的检测
+      let scrollThrottleRAF = null;
+      let lastScrollTime = 0;
+      const SCROLL_THROTTLE_MS = 16; // 约60fps
+      
       dom.list.addEventListener('scroll', () => {
+        const now = performance.now();
         const currentScrollTop = dom.list.scrollTop;
         const isActuallyScrolling = Math.abs(currentScrollTop - lastScrollTop) > 1;
         lastScrollTop = currentScrollTop;
@@ -5572,27 +5629,27 @@ ${originalText}
             resetAllSwipesImmediate();
           }
           
-          // 使用requestAnimationFrame优化性能
-          if (scrollRAF) {
-            cancelAnimationFrame(scrollRAF);
+          // 使用节流优化性能：限制在每帧最多执行一次
+          if (!scrollThrottleRAF) {
+            scrollThrottleRAF = requestAnimationFrame(() => {
+              scrollThrottleRAF = null;
+              // 确保所有滑动项都已重置
+              resetAllSwipesImmediate();
+            });
           }
-          scrollRAF = requestAnimationFrame(() => {
-            // 确保所有滑动项都已重置
-            resetAllSwipesImmediate();
-          });
         }
         
         // 清除之前的定时器
         if (scrollTimeout) {
           clearTimeout(scrollTimeout);
         }
-        // 滚动结束后，延迟标记滚动结束并清除滚动标记
+        // 滚动结束后，延迟标记滚动结束并清除滚动标记（使用更短的延迟提升响应速度）
         scrollTimeout = setTimeout(() => {
           isScrolling = false;
           scrollTimeout = null;
           // 清除滚动标记，允许按钮正常显示
           clearScrollingMark();
-        }, 150);
+        }, 100); // 从150ms减少到100ms，提升响应速度
       }, { passive: true });
     }
 
@@ -5821,13 +5878,37 @@ ${originalText}
     });
 
     // 全局滚动/尺寸变化：驱动虚拟列表刷新（passive 不阻塞滚动线程）
+    // 使用节流优化性能，减少更新频率
+    let scrollThrottleRAF = null;
     const onScrollOrResize = () => {
-      // 仅在对应页面可见时更新，减少无意义工作
-      if (state.bottomTab === "news") requestVListUpdate("news");
-      else if (state.view === "list") requestVListUpdate("sessions");
+      // 使用 requestAnimationFrame 节流，确保在滚动过程中最多每帧更新一次
+      if (scrollThrottleRAF) return;
+      scrollThrottleRAF = requestAnimationFrame(() => {
+        scrollThrottleRAF = null;
+        // 仅在对应页面可见时更新，减少无意义工作
+        if (state.bottomTab === "news") requestVListUpdate("news");
+        else if (state.view === "list") requestVListUpdate("sessions");
+      });
     };
     window.addEventListener("scroll", onScrollOrResize, { passive: true });
     window.addEventListener("resize", onScrollOrResize, { passive: true });
+    
+    // 为列表容器添加滚动监听（如果列表是容器内滚动）
+    const setupListScrollListener = () => {
+      const listContainer = dom.list;
+      if (!listContainer) return;
+      
+      let listScrollRAF = null;
+      const onListScroll = () => {
+        if (listScrollRAF) return;
+        listScrollRAF = requestAnimationFrame(() => {
+          listScrollRAF = null;
+          if (state.view === "list") requestVListUpdate("sessions");
+        });
+      };
+      listContainer.addEventListener("scroll", onListScroll, { passive: true });
+    };
+    setupListScrollListener();
   };
 
   // ---------- Image preview ----------

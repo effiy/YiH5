@@ -211,6 +211,11 @@ input{border:0;outline:none}
   content-visibility: auto;
   contain: content;
   contain-intrinsic-size: 92px;
+  /* 优化滚动性能 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .newsItem:last-child{border-bottom:0}
 .newsItem:active{background:#fafafa}
@@ -316,11 +321,17 @@ input{border:0;outline:none}
   overscroll-behavior: contain;
   /* 降低滚动时的重绘影响（尤其长对话） */
   contain: paint layout style;
-  /* 启用硬件加速，优化滚动性能 */
-  transform: translateZ(0);
+  /* 启用硬件加速，优化滚动性能 - 使用更强的硬件加速 */
+  transform: translate3d(0, 0, 0);
+  -webkit-transform: translate3d(0, 0, 0);
   will-change: scroll-position;
-  /* 平滑滚动（作为后备，JS 可以覆盖） */
+  /* 优化滚动性能 */
   scroll-behavior: auto;
+  /* 减少滚动时的重绘 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* 优化合成层性能 */
+  isolation: isolate;
 }
 
 /* 确保聊天页的输入框固定在屏幕底部且不会被遮挡 */
@@ -341,8 +352,12 @@ input{border:0;outline:none}
   content-visibility: auto;
   contain: content layout style;
   contain-intrinsic-size: 120px;
-  /* 优化渲染性能 */
-  will-change: contents;
+  /* 优化渲染性能 - 使用硬件加速 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  /* 减少重绘 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .chatMsg--bot{ --chat-bubble-bg:#fff; }
 .chatMsg--me{ --chat-bubble-bg:#95ec69; }
@@ -857,17 +872,42 @@ input{border:0;outline:none}
 }
 .ghostBtn:active{background:rgba(0,0,0,.06)}
 
-.list{display:flex;flex-direction:column}
+.list{
+  display:flex;
+  flex-direction:column;
+  /* 优化滚动性能 */
+  -webkit-overflow-scrolling: touch;
+  /* 启用硬件加速 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  /* 减少滚动时的重绘 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* 优化合成层 */
+  will-change: scroll-position;
+}
 
 /* ---------- 轻量虚拟列表（用于长列表上下滑动优化） ---------- */
-.list[data-vlist="1"]{display:block}
+.list[data-vlist="1"]{
+  display:block;
+  /* 优化虚拟列表滚动性能 */
+  -webkit-overflow-scrolling: touch;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  will-change: scroll-position;
+}
 .vlist__spacer{
   width:100%;
   height:0px;
+  /* 优化占位符渲染 */
+  contain: strict;
 }
 .vlist__items{
   display:flex;
   flex-direction:column;
+  /* 优化内容区域渲染 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 
 /* 左滑删除容器 */
@@ -880,6 +920,11 @@ input{border:0;outline:none}
   content-visibility: auto;
   contain: content;
   contain-intrinsic-size: 84px;
+  /* 优化滚动性能 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .swipe-item-wrapper:last-child{border-bottom:0}
 
@@ -1015,6 +1060,11 @@ input{border:0;outline:none}
   content-visibility: auto;
   contain: content;
   contain-intrinsic-size: 84px;
+  /* 优化滚动性能 */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .item:last-child{border-bottom:0}
 .item:active{background:#fafafa}
