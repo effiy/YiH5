@@ -1533,7 +1533,7 @@
     if (!content) {
       dom.pageDescContent.innerHTML = `
         <div class="contextSection">
-          <div class="contextValue">当前会话暂无 pageDescription，可点击「✨ 智能生成」根据页面上下文生成（≤200字）。</div>
+          <div class="contextValue">当前会话暂无 pageDescription，可点击「✨ 智能生成」根据页面上下文生成。</div>
         </div>
       `;
       return;
@@ -1749,16 +1749,16 @@
     }
   };
 
-  // 生成页面描述：清洗 + 单行化 + 截断到指定字数
-  const normalizeGeneratedDescription = (rawText, maxChars = 200) => {
+  // 生成页面描述：清洗 + 单行化（不再限制字数）
+  const normalizeGeneratedDescription = (rawText, maxChars = null) => {
     let text = cleanOptimizedText(rawText);
     if (!text) return "";
     // 单行化：把换行/多空白压缩成一个空格，避免列表/段落导致预览体验差
     text = String(text).replace(/\s+/g, " ").trim();
     if (!text) return "";
-    if (text.length <= maxChars) return text;
-    // 严格控制在 maxChars 以内（不额外加省略号，避免超限）
-    return text.slice(0, maxChars).trim();
+    // 不再限制字数，返回完整内容
+    if (maxChars === null || text.length <= maxChars) return text;
+    return text;
   };
 
   const optimizePageContext = async () => {
@@ -1935,14 +1935,13 @@ ${originalText}
       const url = String(s.url || "").trim();
       const tags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()).filter(Boolean) : [];
 
-      const systemPrompt = `你是一个专业的“页面描述（pageDescription）”生成助手。
+      const systemPrompt = `你是一个专业的"页面描述（pageDescription）"生成助手。
 你的任务：根据提供的页面上下文内容（pageContent）生成一段简洁、客观、可读的中文页面描述，用于帮助 AI 快速把握页面要点。
 硬性要求：
 1) 只输出描述正文，不要标题/列表/引用/前后缀说明
-2) 不编造、不补充上下文中不存在的信息
-3) 总长度不超过 200 个汉字（含标点）`;
+2) 不编造、不补充上下文中不存在的信息`;
 
-      const userPrompt = `请基于以下信息生成页面描述（≤200字）：
+      const userPrompt = `请基于以下信息生成页面描述：
 
 页面标题：${title || "（无）"}
 页面 URL：${url || "（无）"}
@@ -1954,7 +1953,7 @@ ${pageContent.substring(0, 6000)}
 请直接返回最终描述正文。`;
 
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      const generated = normalizeGeneratedDescription(result, 200);
+      const generated = normalizeGeneratedDescription(result);
       if (!generated) {
         window.alert("生成失败：未得到有效的页面描述内容，请稍后重试。");
         renderPageDescSheet();
