@@ -573,6 +573,8 @@
           // 下面这些是本地 UI 状态（接口没有也没关系）
           muted: s.muted !== undefined ? !!s.muted : false,
           lastActiveAt,
+          // 收藏状态：从后端返回的 isFavorite 字段
+          isFavorite: s.isFavorite !== undefined ? !!s.isFavorite : false,
         };
       });
       
@@ -4154,8 +4156,17 @@ ${originalText}
 
     // 排序逻辑
     if (!hasFilter) {
-      // 没有筛选条件：按修改时间倒序排序（最新的在前面）
+      // 没有筛选条件：收藏的会话优先显示在最前面
       arr.sort((a, b) => {
+        const aFavorite = a.isFavorite || false;
+        const bFavorite = b.isFavorite || false;
+        
+        // 如果收藏状态不同，收藏的排在前面
+        if (aFavorite !== bFavorite) {
+          return bFavorite ? 1 : -1;
+        }
+        
+        // 如果都是收藏或都不是收藏，按修改时间倒序排序（最新的在前面）
         const aTime = a.updatedAt || a.lastAccessTime || a.lastActiveAt || a.createdAt || 0;
         const bTime = b.updatedAt || b.lastAccessTime || b.lastActiveAt || b.createdAt || 0;
         if (aTime !== bTime) {
@@ -4261,6 +4272,9 @@ ${originalText}
     const mutedCls = s.muted ? " is-muted" : "";
     // 优先显示 pageTitle，如果没有则显示 title
     const displayTitle = (s.pageTitle && s.pageTitle.trim()) || s.title || "未命名会话";
+    // 如果是收藏的会话，在标题前面添加爱心标识
+    const favoriteIcon = (s.isFavorite) ? '<span style="color: #ef4444; margin-right: 4px;">❤️</span>' : '';
+    const displayTitleWithFavorite = favoriteIcon + escapeHtml(displayTitle);
     // 优先显示 pageDescription，如果没有则显示 preview
     const displayDesc = (s.pageDescription && s.pageDescription.trim()) || s.preview || "—";
     // 会话标签渲染：参考新闻列表的标签样式，但使用不同颜色
@@ -4290,7 +4304,7 @@ ${originalText}
         <article class="item${mutedCls}" data-id="${s.id}">
           <div class="item__mid">
             <div class="item__row1">
-              <div class="item__title"><span>${escapeHtml(displayTitle)}</span></div>
+              <div class="item__title"><span>${displayTitleWithFavorite}</span></div>
               <div class="item__meta">
                 ${messageBadge}
               </div>
@@ -4310,6 +4324,9 @@ ${originalText}
           </div>
         </article>
         <div class="swipe-item__actions">
+          <button class="swipe-item__favorite${s.isFavorite ? ' is-favorited' : ''}" data-action="toggleFavorite" data-id="${s.id}" aria-label="${s.isFavorite ? '取消收藏' : '收藏'}">
+            ${s.isFavorite ? '❤️ 已收藏' : '🤍 收藏'}
+          </button>
           <button class="swipe-item__delete" data-action="swipeDelete" data-id="${s.id}" aria-label="删除会话">
             删除
           </button>
@@ -4623,6 +4640,68 @@ ${originalText}
       };
       // 重新渲染标签列表以更新选中状态
       renderTagFilters();
+    }
+  };
+
+  const toggleFavorite = async (id) => {
+    if (!id) {
+      showToast('会话ID不能为空');
+      return;
+    }
+
+    try {
+      // 找到会话
+      const session = state.sessions.find((s) => String(s.id) === String(id));
+      if (!session) {
+        showToast('会话不存在');
+        return;
+      }
+
+      // 切换收藏状态
+      const newFavoriteState = !(session.isFavorite || false);
+      session.isFavorite = newFavoriteState;
+      session.updatedAt = Date.now();
+
+      // 调用后端 API 更新会话
+      const response = await fetch(`https://api.effiy.cn/session/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({
+          id: session.id,
+          url: session.url,
+          title: session.title,
+          pageTitle: session.pageTitle,
+          pageDescription: session.pageDescription,
+          messages: session.messages || [],
+          tags: session.tags || [],
+          isFavorite: newFavoriteState,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          lastAccessTime: session.lastAccessTime || session.lastActiveAt
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `更新失败: HTTP ${response.status}`);
+      }
+
+      // 重新渲染列表
+      renderList();
+      
+      // 显示成功消息
+      showToast(newFavoriteState ? '已收藏' : '已取消收藏');
+    } catch (error) {
+      console.error('[YiH5] 切换收藏状态失败:', error);
+      showToast('切换收藏状态失败：' + (error.message || '未知错误'));
+      // 恢复状态
+      const session = state.sessions.find((s) => String(s.id) === String(id));
+      if (session) {
+        session.isFavorite = !(session.isFavorite || false);
+      }
     }
   };
 
@@ -4982,6 +5061,25 @@ ${originalText}
       }
     }
 
+    if (action === "toggleFavorite") {
+      // 切换收藏状态
+      ev?.preventDefault?.();
+      ev?.stopPropagation?.();
+      const sessionId = el.dataset.id;
+      if (sessionId) {
+        // 收起滑动状态
+        const wrapper = el.closest('.swipe-item-wrapper');
+        if (wrapper) {
+          wrapper.classList.remove('is-swiped');
+          const item = wrapper.querySelector('.item');
+          if (item) {
+            item.style.transform = '';
+          }
+        }
+        return toggleFavorite(sessionId);
+      }
+    }
+
     if (action === "swipeDelete") {
       // 左滑删除会话
       ev?.preventDefault?.();
@@ -5132,7 +5230,7 @@ ${originalText}
       currentY: 0,
       isSwiping: false,
       currentWrapper: null,
-      deleteButtonWidth: 80
+      deleteButtonWidth: 160  // 两个按钮宽度：收藏80px + 删除80px
     };
 
     // 重置所有滑动状态
@@ -5159,8 +5257,8 @@ ${originalText}
       swipeState.isSwiping = false;
       swipeState.currentWrapper = wrapper;
 
-      // 如果点击的是删除按钮，不处理滑动
-      if (e.target.closest('.swipe-item__delete')) {
+      // 如果点击的是删除按钮或收藏按钮，不处理滑动
+      if (e.target.closest('.swipe-item__delete') || e.target.closest('.swipe-item__favorite')) {
         return;
       }
     };
@@ -5254,10 +5352,10 @@ ${originalText}
       });
     }
 
-    // 点击会话进入聊天（需要排除删除按钮）
+    // 点击会话进入聊天（需要排除删除按钮和收藏按钮）
     dom.list?.addEventListener("click", (ev) => {
-      // 如果点击的是删除按钮，不处理
-      if (ev.target.closest('.swipe-item__delete')) {
+      // 如果点击的是删除按钮或收藏按钮，不处理
+      if (ev.target.closest('.swipe-item__delete') || ev.target.closest('.swipe-item__favorite')) {
         return;
       }
       
@@ -5857,6 +5955,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 

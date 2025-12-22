@@ -894,44 +894,74 @@ input{border:0;outline:none}
 .swipe-item-wrapper .item:active{background:#fafafa}
 .swipe-item-wrapper .item.is-muted{opacity:.75}
 
-/* 删除按钮区域 */
+/* 操作按钮区域（收藏和删除） */
 .swipe-item__actions{
   position:absolute;
   right:0;
   top:0;
   bottom:0;
   display:flex;
-  align-items:center;
-  justify-content:center;
-  background:var(--danger);
-  width:80px;
+  align-items:stretch;
+  width:160px;
   z-index:0;
 }
 
-/* 删除按钮 */
-.swipe-item__delete{
-  width:100%;
+/* 收藏按钮 */
+.swipe-item__favorite{
+  flex:1;
   height:100%;
-  background:transparent;
+  background:#ff9500;
   border:none;
   color:#fff;
-  font-weight:700;
-  font-size:15px;
+  font-weight:500;
+  font-size:14px;
   cursor:pointer;
   white-space:nowrap;
   display:flex;
   align-items:center;
   justify-content:center;
-  transition:background-color 0.2s ease;
+  transition:background-color 0.15s ease;
   padding:0;
+  border-right:1px solid rgba(255,255,255,.15);
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+.swipe-item__favorite:active{
+  background:#e6850e;
+}
+.swipe-item__favorite.is-favorited{
+  background:#fa5151;
+}
+.swipe-item__favorite.is-favorited:active{
+  background:#e04848;
+}
+
+/* 删除按钮 */
+.swipe-item__delete{
+  flex:1;
+  height:100%;
+  background:var(--danger);
+  border:none;
+  color:#fff;
+  font-weight:500;
+  font-size:14px;
+  cursor:pointer;
+  white-space:nowrap;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  transition:background-color 0.15s ease;
+  padding:0;
+  user-select:none;
+  -webkit-tap-highlight-color:transparent;
 }
 .swipe-item__delete:active{
-  background:rgba(255,255,255,.15);
+  background:#e04848;
 }
 
 /* 滑动状态 */
 .swipe-item-wrapper.is-swiped .item{
-  transform:translateX(-80px);
+  transform:translateX(-160px);
 }
 
 .item{
@@ -1614,6 +1644,7 @@ input{border:0;outline:none}
   max-width: 86%;
   text-align:center;
 }
+
 
 
 
