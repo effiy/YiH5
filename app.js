@@ -4396,15 +4396,27 @@ ${originalText}
       });
     }
 
-    // 合并：收藏的会话在最前面，然后是非收藏的会话
-    arr = [...filteredFavorite, ...filteredNonFavorite];
+    // 将非收藏的会话分为无标签和有标签两类
+    const noTagSessions = [];
+    const taggedSessions = [];
+    for (const s of filteredNonFavorite) {
+      const sessionTags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+      if (sessionTags.length === 0) {
+        noTagSessions.push(s);
+      } else {
+        taggedSessions.push(s);
+      }
+    }
+
+    // 合并：收藏的会话在最前面，然后是无标签的会话，最后是有标签的会话
+    arr = [...filteredFavorite, ...noTagSessions, ...taggedSessions];
 
     // 判断是否有筛选条件
     const hasFilter = q || f.selectedTags.length > 0 || f.noTags || state.selectedDate;
 
     // 排序逻辑
     if (!hasFilter) {
-      // 没有筛选条件：收藏的会话优先显示在最前面
+      // 没有筛选条件：收藏的会话优先显示在最前面，然后是无标签的会话
       arr.sort((a, b) => {
         const aFavorite = a.isFavorite || false;
         const bFavorite = b.isFavorite || false;
@@ -4414,7 +4426,20 @@ ${originalText}
           return bFavorite ? 1 : -1;
         }
         
-        // 如果都是收藏或都不是收藏，按修改时间倒序排序（最新的在前面）
+        // 如果都不是收藏，判断是否有标签
+        if (!aFavorite && !bFavorite) {
+          const aTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+          const bTags = Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+          const aHasNoTags = aTags.length === 0;
+          const bHasNoTags = bTags.length === 0;
+          
+          // 如果标签状态不同，无标签的排在前面
+          if (aHasNoTags !== bHasNoTags) {
+            return bHasNoTags ? 1 : -1;
+          }
+        }
+        
+        // 如果都是收藏或都不是收藏（且标签状态相同），按修改时间倒序排序（最新的在前面）
         const aTime = a.updatedAt || a.lastAccessTime || a.lastActiveAt || a.createdAt || 0;
         const bTime = b.updatedAt || b.lastAccessTime || b.lastActiveAt || b.createdAt || 0;
         if (aTime !== bTime) {
@@ -4426,7 +4451,7 @@ ${originalText}
         return aId.localeCompare(bId);
       });
     } else {
-      // 有筛选条件：收藏的会话优先显示在最前面，然后按文件名排序
+      // 有筛选条件：收藏的会话优先显示在最前面，然后是无标签的会话，然后按文件名排序
       arr.sort((a, b) => {
         const aFavorite = a.isFavorite || false;
         const bFavorite = b.isFavorite || false;
@@ -4436,7 +4461,20 @@ ${originalText}
           return bFavorite ? 1 : -1;
         }
         
-        // 如果收藏状态相同，按文件名排序（不区分大小写，支持中文和数字）
+        // 如果都不是收藏，判断是否有标签
+        if (!aFavorite && !bFavorite) {
+          const aTags = Array.isArray(a.tags) ? a.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+          const bTags = Array.isArray(b.tags) ? b.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+          const aHasNoTags = aTags.length === 0;
+          const bHasNoTags = bTags.length === 0;
+          
+          // 如果标签状态不同，无标签的排在前面
+          if (aHasNoTags !== bHasNoTags) {
+            return bHasNoTags ? 1 : -1;
+          }
+        }
+        
+        // 如果收藏状态相同（且标签状态相同），按文件名排序（不区分大小写，支持中文和数字）
         const aTitle = (a.pageTitle || a.title || '').trim();
         const bTitle = (b.pageTitle || b.title || '').trim();
         const titleCompare = aTitle.localeCompare(bTitle, 'zh-CN', { numeric: true, sensitivity: 'base' });
@@ -6662,6 +6700,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
