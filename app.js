@@ -334,10 +334,12 @@
       loadedAt: 0,
     },
     filterDraft: {
-      selectedTags: [], // 选中的标签数组
+      selectedTags: ["网文"], // 选中的标签数组（默认选中"网文"）
+      noTags: true, // 是否筛选没有标签的会话（默认选中）
     },
     filter: {
-      selectedTags: [], // 选中的标签数组
+      selectedTags: ["网文"], // 选中的标签数组（默认选中"网文"）
+      noTags: true, // 是否筛选没有标签的会话（默认选中）
     },
     newsFilterDraft: {
       selectedTags: [], // 新闻筛选草稿：选中的标签数组
@@ -615,12 +617,20 @@
       
       state.sessions = Array.from(sessionMap.values());
       
-      // 如果筛选标签为空，且存在"网文"标签，则默认选择"网文"标签
+      // 默认同时选中"没有标签"筛选和"网文"标签
+      if (state.filter.noTags === undefined) {
+        state.filter.noTags = true;
+        state.filterDraft.noTags = true;
+      }
+      // 如果筛选标签为空，默认选择"网文"标签
       if (state.filter.selectedTags.length === 0) {
         const allTags = getAllTags();
         if (allTags.includes("网文")) {
           state.filter.selectedTags = ["网文"];
           state.filterDraft.selectedTags = ["网文"];
+        } else if (allTags.length > 0) {
+          state.filter.selectedTags = [allTags[0]];
+          state.filterDraft.selectedTags = [allTags[0]];
         }
       }
     } catch (error) {
@@ -4294,6 +4304,14 @@ ${originalText}
     const f = state.filter;
     if (state.q.trim()) c.push({ key: "q", label: `搜索：${state.q.trim()}` });
     // 日期标签已移除，日期筛选功能保留
+    // 显示"没有标签"筛选
+    if (f.noTags) {
+      const noTagsCount = state.sessions.filter((s) => {
+        const sessionTags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()) : [];
+        return sessionTags.length === 0 || !sessionTags.some((t) => t);
+      }).length;
+      c.push({ key: "noTags", label: "没有标签", count: noTagsCount });
+    }
     // 显示选中的标签
     f.selectedTags.forEach((tag) => {
       const count = getTagCount(tag);
@@ -4329,12 +4347,23 @@ ${originalText}
       });
     }
 
-    // 标签筛选：如果选中了标签，非收藏的会话必须包含至少一个选中的标签
+    // 标签筛选（并集逻辑）：如果选中了标签或启用了"没有标签"筛选
+    // 显示"没有标签的会话"或"包含选中标签的会话"（并集）
     // 收藏的会话不受标签筛选影响
-    if (f.selectedTags.length > 0) {
+    if (f.noTags || f.selectedTags.length > 0) {
       filteredNonFavorite = filteredNonFavorite.filter((s) => {
         const sessionTags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()) : [];
-        return f.selectedTags.some((selectedTag) => sessionTags.includes(selectedTag));
+        const hasNoTags = sessionTags.length === 0 || !sessionTags.some((t) => t);
+        const hasSelectedTags = f.selectedTags.length > 0 && f.selectedTags.some((selectedTag) => sessionTags.includes(selectedTag));
+        
+        // 并集逻辑：如果启用了"没有标签"筛选，或者会话包含选中的标签
+        if (f.noTags && hasNoTags) {
+          return true; // 没有标签的会话
+        }
+        if (f.selectedTags.length > 0 && hasSelectedTags) {
+          return true; // 包含选中标签的会话
+        }
+        return false;
       });
     }
 
@@ -4371,7 +4400,7 @@ ${originalText}
     arr = [...filteredFavorite, ...filteredNonFavorite];
 
     // 判断是否有筛选条件
-    const hasFilter = q || f.selectedTags.length > 0 || state.selectedDate;
+    const hasFilter = q || f.selectedTags.length > 0 || f.noTags || state.selectedDate;
 
     // 排序逻辑
     if (!hasFilter) {
@@ -4622,6 +4651,7 @@ ${originalText}
     // 同步草稿
     state.filterDraft = {
       selectedTags: [...state.filter.selectedTags],
+      noTags: state.filter.noTags !== undefined ? state.filter.noTags : true, // 默认选中
     };
     
     // 先渲染标签列表（会根据filterDraft自动设置选中状态）
@@ -4652,12 +4682,34 @@ ${originalText}
     if (!tagContainer) return;
     
     const allTags = getOrderedTags();
+    const noTagsSelected = state.filterDraft.noTags || false;
+    
+    // 计算没有标签的会话数量
+    const noTagsCount = state.sessions.filter((s) => {
+      const sessionTags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()) : [];
+      return sessionTags.length === 0 || !sessionTags.some((t) => t);
+    }).length;
+    
+    // 先渲染"没有标签"按钮
+    let html = `
+      <button
+        type="button"
+        class="option ${noTagsSelected ? 'is-selected' : ''}"
+        data-action="toggleNoTags"
+        title="筛选没有标签的会话"
+      >
+        <span>没有标签</span>
+        <span class="option__count">${noTagsCount}</span>
+      </button>
+    `;
+    
     if (allTags.length === 0) {
-      tagContainer.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:10px 0;">暂无标签</div>';
+      tagContainer.innerHTML = html + '<div style="color:var(--muted);font-size:13px;padding:10px 0;margin-top:8px;">暂无标签</div>';
       return;
     }
     
-    tagContainer.innerHTML = allTags
+    // 渲染其他标签
+    html += allTags
       .map((tag) => {
         const isSelected = state.filterDraft.selectedTags.includes(tag);
         const count = getTagCount(tag);
@@ -4676,6 +4728,8 @@ ${originalText}
         `;
       })
       .join("");
+
+    tagContainer.innerHTML = html;
 
     // 绑定拖拽排序（每次渲染重新绑定到新节点）
     bindTagDragSort(tagContainer);
@@ -4891,9 +4945,12 @@ ${originalText}
 
   const applyFilter = () => {
     // 收集选中的标签（从filterDraft中获取，因为点击时已经更新了）
-    // 确保至少选择一个标签，如果没有选中任何标签，则默认选择"网文"（如果存在），否则选择第一个可用标签
+    // 默认同时选中"没有标签"筛选和"网文"标签
+    const noTags = state.filterDraft.noTags !== undefined ? state.filterDraft.noTags : true;
     let selectedTags = [...state.filterDraft.selectedTags];
-    if (selectedTags.length === 0) {
+    
+    // 如果既没有启用"没有标签"筛选，也没有选中任何标签，则默认选择"网文"标签
+    if (!noTags && selectedTags.length === 0) {
       const allTags = getAllTags();
       if (allTags.length > 0) {
         // 优先选择"网文"标签，如果不存在则选择第一个标签
@@ -4910,10 +4967,12 @@ ${originalText}
     }
     const next = {
       selectedTags: selectedTags,
+      noTags: noTags,
     };
     state.filter = next;
     state.filterDraft = {
       selectedTags: selectedTags,
+      noTags: noTags,
     };
     closeFilter();
     renderList();
@@ -4937,18 +4996,12 @@ ${originalText}
       // 重新渲染标签列表以更新选中状态
       renderNewsTagFilters();
     } else {
-      // 重置时，确保至少选择一个标签：优先选择"网文"标签，如果不存在则选择第一个可用标签
+      // 重置时，恢复默认状态：同时选中"没有标签"筛选和"网文"标签
       const allTags = getAllTags();
-      let defaultTags = [];
-      if (allTags.length > 0) {
-        if (allTags.includes("网文")) {
-          defaultTags = ["网文"];
-        } else {
-          defaultTags = [allTags[0]];
-        }
-      }
+      const defaultTags = allTags.includes("网文") ? ["网文"] : (allTags.length > 0 ? [allTags[0]] : []);
       state.filterDraft = {
         selectedTags: defaultTags,
+        noTags: true, // 默认选中"没有标签"筛选
       };
       // 重新渲染标签列表以更新选中状态
       renderTagFilters();
@@ -5129,13 +5182,24 @@ ${originalText}
       // 统一走 setSelectedDate，确保会话/新闻联动一致
       setSelectedDate("", { syncPicker: true, render: false });
     }
+    if (key === "noTags") {
+      // 如果移除"没有标签"筛选后，既没有标签也没有"没有标签"筛选，则不允许移除
+      if (state.filter.selectedTags.length === 0) {
+        showToast('至少需要保留一个筛选条件');
+        return;
+      }
+      state.filter.noTags = false;
+      renderList();
+      renderChips();
+      return;
+    }
     if (key.startsWith("tag_")) {
       // 检查当前选中的标签数量
       const currentTagCount = state.filter.selectedTags.length;
       
-      // 如果只剩下一个标签，不允许移除
-      if (currentTagCount <= 1) {
-        showToast('至少需要保留一个标签');
+      // 如果移除后既没有标签也没有"没有标签"筛选，则不允许移除
+      if (currentTagCount <= 1 && !state.filter.noTags) {
+        showToast('至少需要保留一个筛选条件');
         return;
       }
       
@@ -5215,10 +5279,10 @@ ${originalText}
     const index = state.filterDraft.selectedTags.indexOf(tag);
     if (index > -1) {
       // 如果已选中，则取消选中
-      // 但至少需要保留一个标签，如果当前只有一个标签，则不允许取消
-      if (state.filterDraft.selectedTags.length <= 1) {
-        // 至少保留一个标签，不允许取消
-        showToast('至少需要保留一个标签');
+      // 但至少需要保留一个筛选条件：要么至少有一个标签，要么启用了"没有标签"筛选
+      if (state.filterDraft.selectedTags.length <= 1 && !state.filterDraft.noTags) {
+        // 如果取消后既没有标签也没有"没有标签"筛选，则不允许取消
+        showToast('至少需要保留一个筛选条件');
         return;
       }
       state.filterDraft.selectedTags.splice(index, 1);
@@ -5241,6 +5305,12 @@ ${originalText}
     }
     // 重新渲染标签列表以更新选中状态
     renderNewsTagFilters();
+  };
+
+  const toggleNoTags = () => {
+    state.filterDraft.noTags = !state.filterDraft.noTags;
+    // 重新渲染标签列表以更新选中状态
+    renderTagFilters();
   };
 
   // ---------- Refresh helpers ----------
@@ -5384,6 +5454,9 @@ ${originalText}
       }
       const tag = el.dataset.tag;
       if (tag) return toggleTag(tag);
+    }
+    if (action === "toggleNoTags") {
+      return toggleNoTags();
     }
     if (action === "toggleNewsTag") {
       // 拖拽排序时会触发 click（尤其是移动端），这里直接吞掉
@@ -6589,6 +6662,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
