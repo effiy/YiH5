@@ -614,6 +614,15 @@
       });
       
       state.sessions = Array.from(sessionMap.values());
+      
+      // 如果筛选标签为空，且存在"网文"标签，则默认选择"网文"标签
+      if (state.filter.selectedTags.length === 0) {
+        const allTags = getAllTags();
+        if (allTags.includes("网文")) {
+          state.filter.selectedTags = ["网文"];
+          state.filterDraft.selectedTags = ["网文"];
+        }
+      }
     } catch (error) {
       console.error("获取会话列表失败:", error);
       // 如果API请求失败，使用空数组，避免应用崩溃
@@ -832,8 +841,9 @@
       `;
     }
     
-    // 普通新闻项
-    const tagBadges = (item.tags || [])
+    // 普通新闻项：过滤掉"网文"标签
+    const filteredTags = (item.tags || []).filter((t) => t !== "网文");
+    const tagBadges = filteredTags
       .slice(0, 4)
       .map((t) => `<span class="badge is-green">${escapeHtml(t)}</span>`)
       .join("");
@@ -1243,7 +1253,8 @@
     if (state.news.q.trim()) c.push({ key: "q", label: `搜索：${state.news.q.trim()}` });
     // 显示选中的标签
     f.selectedTags.forEach((tag) => {
-      c.push({ key: `tag_${tag}`, label: tag, tagValue: tag });
+      const count = getNewsTagCount(tag);
+      c.push({ key: `tag_${tag}`, label: tag, tagValue: tag, count });
     });
     return c;
   };
@@ -1354,7 +1365,7 @@
       .map(
         (c) => `
           <span class="chip" data-chip="${c.key}">
-            <span>${escapeHtml(c.label)}</span>
+            <span>${escapeHtml(c.label)}${c.count !== undefined ? ` <span class="chip__count">(${c.count})</span>` : ''}</span>
             <button class="chip__x" type="button" aria-label="移除" data-action="removeNewsChip" data-key="${c.key}" ${c.tagValue ? `data-tag-value="${escapeHtml(c.tagValue)}"` : ''}>×</button>
           </span>
         `,
@@ -3867,6 +3878,15 @@ ${originalText}
       const now = Date.now();
 
       // 创建新会话数据
+      // 从新闻标签中过滤掉"网文"标签，然后在保存时自动追加"网文"标签
+      const newsTags = Array.isArray(news.tags) ? news.tags : [];
+      const filteredTags = newsTags.filter((t) => t !== "网文");
+      // 保存会话时自动追加"网文"标签
+      const sessionTags = [...filteredTags];
+      if (!sessionTags.includes("网文")) {
+        sessionTags.push("网文");
+      }
+      
       const newSession = {
         id: sessionId,
         url: newsLink,
@@ -3874,7 +3894,7 @@ ${originalText}
         pageDescription: newsDescription,
         pageContent: newsDescription, // 新闻描述也赋值给会话上下文字段
         messages: [],
-        tags: Array.isArray(news.tags) ? news.tags : [],
+        tags: sessionTags,
         createdAt: now,
         updatedAt: now,
         lastAccessTime: now,
@@ -4271,7 +4291,8 @@ ${originalText}
     // 日期标签已移除，日期筛选功能保留
     // 显示选中的标签
     f.selectedTags.forEach((tag) => {
-      c.push({ key: `tag_${tag}`, label: tag, tagValue: tag });
+      const count = getTagCount(tag);
+      c.push({ key: `tag_${tag}`, label: tag, tagValue: tag, count });
     });
     return c;
   };
@@ -4281,22 +4302,39 @@ ${originalText}
     const f = state.filter;
     let arr = state.sessions.slice();
 
+    // 分离收藏的会话和非收藏的会话
+    const favoriteSessions = [];
+    const nonFavoriteSessions = [];
+    
+    for (const s of arr) {
+      if (s.isFavorite) {
+        favoriteSessions.push(s);
+      } else {
+        nonFavoriteSessions.push(s);
+      }
+    }
+
+    // 对非收藏的会话进行筛选
+    let filteredNonFavorite = nonFavoriteSessions;
+
     if (q) {
-      arr = arr.filter((s) => {
+      filteredNonFavorite = filteredNonFavorite.filter((s) => {
         const hay = `${s.title} ${s.pageTitle || ""} ${s.preview || ""} ${s.url || ""} ${s.tags.join(" ")}`.toLowerCase();
         return hay.includes(q);
       });
     }
 
-    // 标签筛选：如果选中了标签，会话必须包含至少一个选中的标签
+    // 标签筛选：如果选中了标签，非收藏的会话必须包含至少一个选中的标签
+    // 收藏的会话不受标签筛选影响
     if (f.selectedTags.length > 0) {
-      arr = arr.filter((s) => {
+      filteredNonFavorite = filteredNonFavorite.filter((s) => {
         const sessionTags = Array.isArray(s.tags) ? s.tags.map((t) => String(t).trim()) : [];
         return f.selectedTags.some((selectedTag) => sessionTags.includes(selectedTag));
       });
     }
 
-    // 日期过滤：只有在没有选中标签时才生效
+    // 日期过滤：只有在没有选中标签时才生效，且只对非收藏的会话生效
+    // 收藏的会话不受日期筛选影响
     if (f.selectedTags.length === 0 && state.selectedDate) {
       const selectedDate = dateUtil.parseYMD(state.selectedDate);
       if (selectedDate) {
@@ -4304,7 +4342,7 @@ ${originalText}
         const selectedMonth = selectedDate.getMonth();
         const selectedDay = selectedDate.getDate();
 
-        arr = arr.filter((s) => {
+        filteredNonFavorite = filteredNonFavorite.filter((s) => {
           const sessionDate = new Date(s.lastActiveAt);
           return (
             sessionDate.getFullYear() === selectedYear &&
@@ -4314,6 +4352,18 @@ ${originalText}
         });
       }
     }
+
+    // 对收藏的会话也进行搜索筛选（如果有搜索关键词）
+    let filteredFavorite = favoriteSessions;
+    if (q) {
+      filteredFavorite = filteredFavorite.filter((s) => {
+        const hay = `${s.title} ${s.pageTitle || ""} ${s.preview || ""} ${s.url || ""} ${s.tags.join(" ")}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    // 合并：收藏的会话在最前面，然后是非收藏的会话
+    arr = [...filteredFavorite, ...filteredNonFavorite];
 
     // 判断是否有筛选条件
     const hasFilter = q || f.selectedTags.length > 0 || state.selectedDate;
@@ -4342,13 +4392,19 @@ ${originalText}
         return aId.localeCompare(bId);
       });
     } else {
-      // 有筛选条件：按文件名排序（与 YiPet 保持一致）
+      // 有筛选条件：收藏的会话优先显示在最前面，然后按文件名排序
       arr.sort((a, b) => {
-        // 获取会话的显示标题（文件名）
+        const aFavorite = a.isFavorite || false;
+        const bFavorite = b.isFavorite || false;
+        
+        // 如果收藏状态不同，收藏的排在前面
+        if (aFavorite !== bFavorite) {
+          return bFavorite ? 1 : -1;
+        }
+        
+        // 如果收藏状态相同，按文件名排序（不区分大小写，支持中文和数字）
         const aTitle = (a.pageTitle || a.title || '').trim();
         const bTitle = (b.pageTitle || b.title || '').trim();
-        
-        // 按文件名排序（不区分大小写，支持中文和数字）
         const titleCompare = aTitle.localeCompare(bTitle, 'zh-CN', { numeric: true, sensitivity: 'base' });
         if (titleCompare !== 0) {
           return titleCompare;
@@ -4376,7 +4432,7 @@ ${originalText}
       .map(
         (c) => `
           <span class="chip" data-chip="${c.key}">
-            <span>${escapeHtml(c.label)}</span>
+            <span>${escapeHtml(c.label)}${c.count !== undefined ? ` <span class="chip__count">(${c.count})</span>` : ''}</span>
             <button class="chip__x" type="button" aria-label="移除" data-action="removeChip" data-key="${c.key}" ${c.tagValue ? `data-tag-value="${escapeHtml(c.tagValue)}"` : ''}>×</button>
           </span>
         `,
@@ -4830,10 +4886,30 @@ ${originalText}
 
   const applyFilter = () => {
     // 收集选中的标签（从filterDraft中获取，因为点击时已经更新了）
+    // 确保至少选择一个标签，如果没有选中任何标签，则默认选择"网文"（如果存在），否则选择第一个可用标签
+    let selectedTags = [...state.filterDraft.selectedTags];
+    if (selectedTags.length === 0) {
+      const allTags = getAllTags();
+      if (allTags.length > 0) {
+        // 优先选择"网文"标签，如果不存在则选择第一个标签
+        if (allTags.includes("网文")) {
+          selectedTags = ["网文"];
+        } else {
+          selectedTags = [allTags[0]];
+        }
+      } else {
+        // 如果没有可用标签，显示提示
+        showToast('没有可用的标签');
+        return;
+      }
+    }
     const next = {
-      selectedTags: [...state.filterDraft.selectedTags],
+      selectedTags: selectedTags,
     };
     state.filter = next;
+    state.filterDraft = {
+      selectedTags: selectedTags,
+    };
     closeFilter();
     renderList();
   };
@@ -4856,8 +4932,18 @@ ${originalText}
       // 重新渲染标签列表以更新选中状态
       renderNewsTagFilters();
     } else {
+      // 重置时，确保至少选择一个标签：优先选择"网文"标签，如果不存在则选择第一个可用标签
+      const allTags = getAllTags();
+      let defaultTags = [];
+      if (allTags.length > 0) {
+        if (allTags.includes("网文")) {
+          defaultTags = ["网文"];
+        } else {
+          defaultTags = [allTags[0]];
+        }
+      }
       state.filterDraft = {
-        selectedTags: [],
+        selectedTags: defaultTags,
       };
       // 重新渲染标签列表以更新选中状态
       renderTagFilters();
@@ -5039,6 +5125,15 @@ ${originalText}
       setSelectedDate("", { syncPicker: true, render: false });
     }
     if (key.startsWith("tag_")) {
+      // 检查当前选中的标签数量
+      const currentTagCount = state.filter.selectedTags.length;
+      
+      // 如果只剩下一个标签，不允许移除
+      if (currentTagCount <= 1) {
+        showToast('至少需要保留一个标签');
+        return;
+      }
+      
       // 从selectedTags中移除对应的标签
       if (tagValue) {
         state.filter.selectedTags = state.filter.selectedTags.filter((t) => t !== tagValue);
@@ -5115,6 +5210,12 @@ ${originalText}
     const index = state.filterDraft.selectedTags.indexOf(tag);
     if (index > -1) {
       // 如果已选中，则取消选中
+      // 但至少需要保留一个标签，如果当前只有一个标签，则不允许取消
+      if (state.filterDraft.selectedTags.length <= 1) {
+        // 至少保留一个标签，不允许取消
+        showToast('至少需要保留一个标签');
+        return;
+      }
       state.filterDraft.selectedTags.splice(index, 1);
     } else {
       // 如果未选中，则选中
@@ -6482,6 +6583,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
