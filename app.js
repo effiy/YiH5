@@ -1992,6 +1992,7 @@ ${originalText}
           pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
           pageContent: content,
           tags: Array.isArray(s.tags) ? s.tags : [],
+          isFavorite: s.isFavorite !== undefined ? s.isFavorite : false,
           createdAt: s.createdAt || now,
           updatedAt: s.updatedAt || now,
           lastAccessTime: s.lastAccessTime || now,
@@ -2164,6 +2165,7 @@ ${originalText}
           // 注意：仅在本地确实有 pageContent 时才一起带上，避免用空值覆盖后端已有页面上下文
           pageContent: pageContentToSend || undefined,
           tags: Array.isArray(s.tags) ? s.tags : [],
+          isFavorite: s.isFavorite !== undefined ? s.isFavorite : false,
           createdAt: s.createdAt || now,
           updatedAt: s.updatedAt || now,
           lastAccessTime: s.lastAccessTime || now,
@@ -2429,6 +2431,7 @@ ${originalText}
         pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
         pageContent: s.pageContent || "",
         tags: Array.isArray(s.tags) ? s.tags : [],
+        isFavorite: s.isFavorite !== undefined ? s.isFavorite : false,
         createdAt: s.createdAt || now,
         updatedAt: s.updatedAt || now,
         lastAccessTime: s.lastAccessTime || now,
@@ -3549,6 +3552,7 @@ ${originalText}
           pageDescription: (session.pageDescription && String(session.pageDescription).trim()) || session.preview || "",
           pageContent: session.pageContent || "",
           tags: Array.isArray(session.tags) ? session.tags : [],
+          isFavorite: session.isFavorite !== undefined ? session.isFavorite : false,
           createdAt: session.createdAt || now,
           updatedAt: session.updatedAt || now,
           lastAccessTime: session.lastAccessTime || now,
@@ -3709,6 +3713,7 @@ ${originalText}
         pageDescription: (session.pageDescription && String(session.pageDescription).trim()) || session.preview || "",
         pageContent: session.pageContent || "",
         tags: Array.isArray(session.tags) ? session.tags : [],
+        isFavorite: session.isFavorite !== undefined ? session.isFavorite : false,
         createdAt: session.createdAt || Date.now(),
         updatedAt: session.updatedAt || Date.now(),
         lastAccessTime: session.lastAccessTime || Date.now(),
@@ -6084,6 +6089,7 @@ ${originalText}
           pageDescription: (s.pageDescription && String(s.pageDescription).trim()) || s.preview || "",
           pageContent: s.pageContent || "",
           tags: Array.isArray(s.tags) ? s.tags : [],
+          isFavorite: s.isFavorite !== undefined ? s.isFavorite : false,
           createdAt: s.createdAt || Date.now(),
           updatedAt: s.updatedAt || Date.now(),
           lastAccessTime: s.lastAccessTime || Date.now(),
@@ -6583,6 +6589,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 

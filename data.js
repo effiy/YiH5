@@ -5,7 +5,11 @@
 
 // ---------- 会话数据规范化 ----------
 export const normalizeSession = (s) => {
-  const tags = Array.isArray(s.tags) ? s.tags : (s.tags ? [s.tags] : []);
+  let tags = Array.isArray(s.tags) ? s.tags : (s.tags ? [s.tags] : []);
+  // 如果标签为空，默认添加"网文"标签
+  if (tags.length === 0) {
+    tags = ["网文"];
+  }
   const title = (s.title ?? s.pageTitle ?? "").trim() || "未命名会话";
   const preview = (s.pageDescription ?? s.preview ?? s.summary ?? "").trim();
   const updatedAt = Number(s.updatedAt ?? s.updated_at ?? Date.now());
@@ -120,4 +124,5 @@ export const buildSessionPayload = (s) => {
     messages: messagesForBackend,
   };
 };
+
 
