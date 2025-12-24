@@ -348,6 +348,8 @@
     sessionsLoading: false,
     bottomTab: "sessions", // sessions | news
     chatSourceTab: null, // 记录进入聊天页面的来源标签页（sessions | news），用于返回时恢复
+    scrollToSessionId: null, // 返回列表时需要滚动到的会话ID
+    scrollToNewsKey: null, // 返回列表时需要滚动到的新闻key
     news: {
       items: [],
       loading: false,
@@ -1383,6 +1385,58 @@
       .join("");
   };
 
+  // 滚动到指定的新闻项
+  const scrollToNews = (newsKey) => {
+    if (!newsKey || !dom.newsList) return;
+    
+    // 查找对应的新闻项（支持 data-key 和 data-news-key 两种属性）
+    const newsItem = dom.newsList.querySelector(`[data-key="${String(newsKey)}"]`) || 
+                     dom.newsList.querySelector(`[data-news-key="${String(newsKey)}"]`);
+    if (newsItem) {
+      // 如果已经渲染，直接滚动到该项
+      newsItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    
+    // 如果是虚拟列表模式，需要先滚动到大概位置，等待渲染后再精确定位
+    const v = vlist.news;
+    if (v && v.enabled && Array.isArray(v.items)) {
+      // 在虚拟列表中查找新闻索引
+      const newsIndex = v.items.findIndex(item => {
+        const itemKey = item.key || item.newsKey;
+        return String(itemKey) === String(newsKey);
+      });
+      if (newsIndex >= 0) {
+        // 使用虚拟列表的 itemHeight 来计算位置
+        const itemHeight = Math.max(40, Number(v.itemHeight) || 92);
+        const targetScrollTop = newsIndex * itemHeight;
+        
+        // 滚动到目标位置，留出一些顶部空间以便看到完整项
+        dom.newsList.scrollTop = Math.max(0, targetScrollTop - 60);
+        
+        // 强制更新虚拟列表，确保目标项被渲染
+        requestVListUpdate("news", { force: true });
+        
+        // 等待虚拟列表更新后，再次尝试精确定位
+        let retryCount = 0;
+        const maxRetries = 10;
+        const checkAndScroll = () => {
+          const item = dom.newsList.querySelector(`[data-key="${String(newsKey)}"]`) || 
+                      dom.newsList.querySelector(`[data-news-key="${String(newsKey)}"]`);
+          if (item) {
+            // 找到项后，使用 scrollIntoView 精确定位
+            item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else if (retryCount < maxRetries) {
+            retryCount++;
+            // 继续等待，最多重试10次
+            setTimeout(checkAndScroll, 50);
+          }
+        };
+        setTimeout(checkAndScroll, 100);
+      }
+    }
+  };
+
   const renderNews = () => {
     if (!dom.newsList || !dom.newsEmpty) return;
 
@@ -1406,6 +1460,9 @@
       return;
     }
 
+    // 保存需要滚动到的新闻key（在重新渲染前）
+    const scrollToNewsKey = state.scrollToNewsKey;
+
     const filteredItems = filterAndSortNews();
     renderNewsChips();
 
@@ -1428,10 +1485,30 @@
       if (parts?.bottom) parts.bottom.style.height = "0px";
       if (parts?.mid) parts.mid.innerHTML = "";
       requestVListUpdate("news", { force: true });
+      
+      // 如果需要滚动到指定新闻，等待虚拟列表渲染完成后再滚动
+      if (scrollToNewsKey) {
+        // 清除标记，避免重复滚动
+        state.scrollToNewsKey = null;
+        // 等待虚拟列表更新完成
+        setTimeout(() => {
+          scrollToNews(scrollToNewsKey);
+        }, 150);
+      }
       return;
     }
     disableVList("news");
     dom.newsList.innerHTML = filteredItems.map(renderNewsItem).join("");
+    
+    // 如果需要滚动到指定新闻
+    if (scrollToNewsKey) {
+      // 清除标记，避免重复滚动
+      state.scrollToNewsKey = null;
+      // 等待DOM更新完成
+      setTimeout(() => {
+        scrollToNews(scrollToNewsKey);
+      }, 50);
+    }
   };
 
   const setBottomTab = async (tab, { persist = true } = {}) => {
@@ -2484,6 +2561,12 @@ ${originalText}
       </svg>
     `;
     btn.addEventListener("click", async () => {
+      // 保存当前会话ID或新闻key，用于返回列表时滚动到对应位置
+      if (state.view === "chat" && state.activeSessionId) {
+        state.scrollToSessionId = state.activeSessionId;
+      } else if (state.view === "newsChat" && state.activeNewsKey) {
+        state.scrollToNewsKey = state.activeNewsKey;
+      }
       // 根据进入聊天页面的来源标签页，切换回对应的标签页
       if (state.chatSourceTab && state.chatSourceTab !== state.bottomTab) {
         await setBottomTab(state.chatSourceTab, { persist: false });
@@ -4550,6 +4633,53 @@ ${originalText}
     }
   };
 
+  // 滚动到指定的会话项
+  const scrollToSession = (sessionId) => {
+    if (!sessionId || !dom.list) return;
+    
+    // 查找对应的会话项
+    const sessionItem = dom.list.querySelector(`[data-id="${String(sessionId)}"]`);
+    if (sessionItem) {
+      // 如果已经渲染，直接滚动到该项
+      sessionItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    
+    // 如果是虚拟列表模式，需要先滚动到大概位置，等待渲染后再精确定位
+    const v = vlist.sessions;
+    if (v && v.enabled && Array.isArray(v.items)) {
+      // 在虚拟列表中查找会话索引
+      const sessionIndex = v.items.findIndex(s => String(s.id) === String(sessionId));
+      if (sessionIndex >= 0) {
+        // 使用虚拟列表的 itemHeight 来计算位置
+        const itemHeight = Math.max(40, Number(v.itemHeight) || 120);
+        const targetScrollTop = sessionIndex * itemHeight;
+        
+        // 滚动到目标位置，留出一些顶部空间以便看到完整项
+        dom.list.scrollTop = Math.max(0, targetScrollTop - 60);
+        
+        // 强制更新虚拟列表，确保目标项被渲染
+        requestVListUpdate("sessions", { force: true });
+        
+        // 等待虚拟列表更新后，再次尝试精确定位
+        let retryCount = 0;
+        const maxRetries = 10;
+        const checkAndScroll = () => {
+          const item = dom.list.querySelector(`[data-id="${String(sessionId)}"]`);
+          if (item) {
+            // 找到项后，使用 scrollIntoView 精确定位
+            item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else if (retryCount < maxRetries) {
+            retryCount++;
+            // 继续等待，最多重试10次
+            setTimeout(checkAndScroll, 50);
+          }
+        };
+        setTimeout(checkAndScroll, 100);
+      }
+    }
+  };
+
   const renderList = () => {
     if (state.sessionsLoading) {
       disableVList("sessions");
@@ -4561,8 +4691,11 @@ ${originalText}
       return;
     }
     
+    // 保存需要滚动到的会话ID（在重新渲染前）
+    const scrollToSessionId = state.scrollToSessionId;
+    
     // 保存当前滚动位置（在重新渲染前）
-    const shouldRestoreScroll = state.view === "list" && dom.list.scrollTop > 0;
+    const shouldRestoreScroll = state.view === "list" && dom.list.scrollTop > 0 && !scrollToSessionId;
     if (shouldRestoreScroll) {
       saveScrollPosition();
     }
@@ -4592,8 +4725,16 @@ ${originalText}
       // 优化：初始渲染时立即更新，避免闪烁
       requestVListUpdate("sessions", { force: true });
       
-      // 恢复滚动位置（仅在需要时）
-      if (shouldRestoreScroll) {
+      // 如果需要滚动到指定会话，等待虚拟列表渲染完成后再滚动
+      if (scrollToSessionId) {
+        // 清除标记，避免重复滚动
+        state.scrollToSessionId = null;
+        // 等待虚拟列表更新完成
+        setTimeout(() => {
+          scrollToSession(scrollToSessionId);
+        }, 150);
+      } else if (shouldRestoreScroll) {
+        // 恢复滚动位置（仅在需要时）
         restoreScrollPosition();
       }
       return;
@@ -4601,8 +4742,16 @@ ${originalText}
     disableVList("sessions");
     dom.list.innerHTML = arr.map(renderItem).join("");
     
-    // 恢复滚动位置（非虚拟列表模式）
-    if (shouldRestoreScroll) {
+    // 如果需要滚动到指定会话
+    if (scrollToSessionId) {
+      // 清除标记，避免重复滚动
+      state.scrollToSessionId = null;
+      // 等待DOM更新完成
+      setTimeout(() => {
+        scrollToSession(scrollToSessionId);
+      }, 50);
+    } else if (shouldRestoreScroll) {
+      // 恢复滚动位置（非虚拟列表模式）
       restoreScrollPosition();
     }
   };
@@ -6700,6 +6849,7 @@ ${originalText}
   window.addEventListener("hashchange", applyRoute);
   init();
 })();
+
 
 
 
