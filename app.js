@@ -1343,6 +1343,9 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
         `,
       )
       .join("");
+    
+    // 更新筛选按钮的激活状态
+    updateFilterButtonState();
   };
 
   // 滚动到指定的新闻项
@@ -1830,7 +1833,7 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
     const quotePairs = [
       ['"', '"'],
       ["'", "'"],
-      [""", """],
+      ["\u201C", "\u201D"],
       ["'", "'"],
       ["「", "」"],
       ["『", "』"],
@@ -4716,6 +4719,27 @@ ${originalText}
         `,
       )
       .join("");
+    
+    // 更新筛选按钮的激活状态
+    updateFilterButtonState();
+  };
+  
+  // 更新筛选按钮的激活状态
+  const updateFilterButtonState = () => {
+    // 会话页面的筛选按钮
+    const filterBtn = document.querySelector('.iconbtn--filter[data-action="openFilter"]');
+    if (filterBtn) {
+      const hasActiveFilter = (state.filter.selectedTags && state.filter.selectedTags.length > 0) || 
+                             (state.filter.noTags !== undefined && !state.filter.noTags);
+      filterBtn.classList.toggle('is-active', hasActiveFilter);
+    }
+    
+    // 新闻页面的筛选按钮
+    const newsFilterBtn = document.querySelector('.iconbtn--filter[data-action="openNewsFilter"]');
+    if (newsFilterBtn) {
+      const hasActiveNewsFilter = state.news.filter.selectedTags && state.news.filter.selectedTags.length > 0;
+      newsFilterBtn.classList.toggle('is-active', hasActiveNewsFilter);
+    }
   };
 
   // 滚动位置记忆：保存和恢复滚动位置
@@ -5285,6 +5309,7 @@ ${originalText}
       noTags: noTags,
     };
     closeFilter();
+    updateFilterButtonState();
     renderList();
   };
 
@@ -5295,6 +5320,7 @@ ${originalText}
     };
     state.news.filter = next;
     closeFilter();
+    updateFilterButtonState();
     renderNews();
   };
 
@@ -5405,6 +5431,309 @@ ${originalText}
       if (session) {
         session.isFavorite = !(session.isFavorite || false);
       }
+    }
+  };
+
+  // 创建空白新会话（从会话视图创建）
+  const createBlankSession = async () => {
+    try {
+      // 生成一个唯一的会话ID（不基于URL，使用时间戳和随机数）
+      const uniqueId = `blank_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const sessionId = uniqueId;
+      
+      // 检查会话ID是否已存在，如果存在则重新生成
+      let finalSessionId = sessionId;
+      let attempts = 0;
+      while (state.sessions.find(s => String(s.id) === String(finalSessionId)) && attempts < 10) {
+        const newUniqueId = `blank_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        finalSessionId = newUniqueId;
+        attempts++;
+      }
+      
+      // 生成唯一的空白会话URL（确保不会重复）
+      const timestamp = Date.now();
+      const randomStr = Math.random().toString(36).substring(2, 11);
+      const uniqueUrl = `blank-session://${timestamp}-${randomStr}`;
+      
+      // 确保URL唯一：检查是否已存在相同URL的会话
+      let finalUrl = uniqueUrl;
+      let urlAttempts = 0;
+      while (state.sessions.some(s => s && s.url === finalUrl) && urlAttempts < 10) {
+        const newTimestamp = Date.now();
+        const newRandomStr = Math.random().toString(36).substring(2, 11);
+        finalUrl = `blank-session://${newTimestamp}-${newRandomStr}`;
+        urlAttempts++;
+      }
+      
+      // 获取当前筛选的会话列表
+      const filteredSessions = filterAndSort();
+      
+      // 构建结构化的会话列表内容
+      let structuredSessionList = '';
+      if (filteredSessions && filteredSessions.length > 0) {
+        structuredSessionList = '\n\n## 当前筛选的会话列表\n\n';
+        
+        filteredSessions.forEach((session, index) => {
+          const title = session.pageTitle || session.title || '未命名会话';
+          const url = session.url || '';
+          const description = session.pageDescription || session.preview || '';
+          
+          structuredSessionList += `### ${index + 1}. ${title}\n\n`;
+          
+          if (url) {
+            structuredSessionList += `**链接**: ${url}\n\n`;
+          }
+          
+          if (description) {
+            structuredSessionList += `**描述**: ${description}\n\n`;
+          }
+          
+          // 如果有标签，也添加进去
+          if (session.tags && Array.isArray(session.tags) && session.tags.length > 0) {
+            structuredSessionList += `**标签**: ${session.tags.join(', ')}\n\n`;
+          }
+          
+          structuredSessionList += '---\n\n';
+        });
+      }
+      
+      // 格式化日期为 yyyy-MM-dd hh:mm:ss 格式
+      const formatDateForTitle = (timestamp) => {
+        const date = new Date(timestamp);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+      };
+      
+      const now = Date.now();
+      const blankSession = {
+        id: finalSessionId,
+        url: finalUrl,
+        pageTitle: `会话_${formatDateForTitle(now)}`,
+        pageDescription: '',
+        pageContent: structuredSessionList || '',
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+        lastAccessTime: now,
+        lastActiveAt: now,
+        tags: [],
+        title: `会话_${formatDateForTitle(now)}`,
+        preview: '',
+        messageCount: 0,
+        muted: false,
+      };
+      
+      // 保存新会话到本地状态
+      state.sessions.push(blankSession);
+      
+      // 自动保存新会话到后端
+      try {
+        const messagesForBackend = [];
+        const payload = {
+          id: String(blankSession.id),
+          url: blankSession.url || "",
+          pageTitle: blankSession.pageTitle || "",
+          pageDescription: blankSession.pageDescription || "",
+          pageContent: blankSession.pageContent || "",
+          tags: [],
+          createdAt: blankSession.createdAt || now,
+          updatedAt: blankSession.updatedAt || now,
+          lastAccessTime: blankSession.lastAccessTime || now,
+          messages: messagesForBackend,
+        };
+        
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
+        
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存新会话到后端失败：HTTP", resp.status);
+        } else {
+          console.log("[YiH5] 新会话已保存到后端:", finalSessionId);
+        }
+      } catch (error) {
+        console.error('自动保存新会话到后端失败:', error);
+      }
+      
+      // 打开新创建的会话
+      navigateToChat(finalSessionId);
+      
+      // 显示成功通知
+      const notificationMsg = filteredSessions.length > 0 
+        ? `已创建新会话（已包含 ${filteredSessions.length} 个筛选会话的信息）`
+        : '已创建新会话';
+      showToast(notificationMsg, 'success');
+      
+      return finalSessionId;
+    } catch (error) {
+      console.error('创建新会话失败:', error);
+      showToast('创建新会话失败：' + (error.message || '未知错误'));
+      throw error;
+    }
+  };
+  
+  // 创建包含新闻列表的新会话（从新闻视图创建）
+  const createNewsSession = async () => {
+    try {
+      // 生成一个唯一的会话ID（不基于URL，使用时间戳和随机数）
+      const uniqueId = `news_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const sessionId = uniqueId;
+      
+      // 检查会话ID是否已存在，如果存在则重新生成
+      let finalSessionId = sessionId;
+      let attempts = 0;
+      while (state.sessions.find(s => String(s.id) === String(finalSessionId)) && attempts < 10) {
+        const newUniqueId = `news_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+        finalSessionId = newUniqueId;
+        attempts++;
+      }
+      
+      // 生成唯一的新闻会话URL（确保不会重复）
+      const timestamp = Date.now();
+      const randomStr = Math.random().toString(36).substring(2, 11);
+      const uniqueUrl = `news-session://${timestamp}-${randomStr}`;
+      
+      // 确保URL唯一：检查是否已存在相同URL的会话
+      let finalUrl = uniqueUrl;
+      let urlAttempts = 0;
+      while (state.sessions.some(s => s && s.url === finalUrl) && urlAttempts < 10) {
+        const newTimestamp = Date.now();
+        const newRandomStr = Math.random().toString(36).substring(2, 11);
+        finalUrl = `news-session://${newTimestamp}-${newRandomStr}`;
+        urlAttempts++;
+      }
+      
+      // 获取当前筛选的新闻列表
+      const filteredNews = filterAndSortNews();
+      
+      // 构建结构化的新闻列表内容
+      let structuredNewsList = '';
+      if (filteredNews && filteredNews.length > 0) {
+        // 过滤出真正的新闻项（排除会话项）
+        const newsItems = filteredNews.filter(item => item.fromNews !== true);
+        
+        if (newsItems.length > 0) {
+          structuredNewsList = '\n\n## 当前筛选的新闻列表\n\n';
+          
+          newsItems.forEach((newsItem, index) => {
+            const title = newsItem.title || '未命名新闻';
+            const link = newsItem.link || '';
+            const description = newsItem.description || '';
+            
+            structuredNewsList += `### ${index + 1}. ${title}\n\n`;
+            
+            if (link) {
+              structuredNewsList += `**链接**: ${link}\n\n`;
+            }
+            
+            if (description) {
+              structuredNewsList += `**描述**: ${description}\n\n`;
+            }
+            
+            // 如果有标签，也添加进去
+            if (newsItem.tags && Array.isArray(newsItem.tags) && newsItem.tags.length > 0) {
+              structuredNewsList += `**标签**: ${newsItem.tags.join(', ')}\n\n`;
+            }
+            
+            structuredNewsList += '---\n\n';
+          });
+        }
+      }
+      
+      // 格式化日期为 yyyy-MM-dd hh:mm:ss 格式
+      const formatDateForTitle = (timestamp) => {
+        const date = new Date(timestamp);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+      };
+      
+      const now = Date.now();
+      const newsSession = {
+        id: finalSessionId,
+        url: finalUrl,
+        pageTitle: `新闻_${formatDateForTitle(now)}`,
+        pageDescription: '',
+        pageContent: structuredNewsList || '',
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+        lastAccessTime: now,
+        lastActiveAt: now,
+        tags: [],
+        title: `新闻_${formatDateForTitle(now)}`,
+        preview: '',
+        messageCount: 0,
+        muted: false,
+      };
+      
+      // 保存新会话到本地状态
+      state.sessions.push(newsSession);
+      
+      // 自动保存新会话到后端
+      try {
+        const messagesForBackend = [];
+        const payload = {
+          id: String(newsSession.id),
+          url: newsSession.url || "",
+          pageTitle: newsSession.pageTitle || "",
+          pageDescription: newsSession.pageDescription || "",
+          pageContent: newsSession.pageContent || "",
+          tags: [],
+          createdAt: newsSession.createdAt || now,
+          updatedAt: newsSession.updatedAt || now,
+          lastAccessTime: newsSession.lastAccessTime || now,
+          messages: messagesForBackend,
+        };
+        
+        const resp = await fetch("https://api.effiy.cn/session/save", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify(payload),
+        });
+        
+        if (!resp.ok) {
+          console.warn("[YiH5] 保存新闻会话到后端失败：HTTP", resp.status);
+        } else {
+          console.log("[YiH5] 新闻会话已保存到后端:", finalSessionId);
+        }
+      } catch (error) {
+        console.error('自动保存新闻会话到后端失败:', error);
+      }
+      
+      // 切换到会话标签页并打开新创建的会话
+      await setBottomTab("sessions", { persist: false });
+      navigateToChat(finalSessionId);
+      
+      // 显示成功通知
+      const newsItems = filteredNews ? filteredNews.filter(item => item.fromNews !== true) : [];
+      const notificationMsg = newsItems.length > 0 
+        ? `已创建新会话（已包含 ${newsItems.length} 条新闻的信息）`
+        : '已创建新会话';
+      showToast(notificationMsg, 'success');
+      
+      return finalSessionId;
+    } catch (error) {
+      console.error('创建新闻会话失败:', error);
+      showToast('创建新闻会话失败：' + (error.message || '未知错误'));
+      throw error;
     }
   };
 
@@ -5523,6 +5852,7 @@ ${originalText}
       }
     }
     dom.q.value = state.q;
+    updateFilterButtonState();
     if (state.bottomTab === "news") renderNews();
     else renderList();
   };
@@ -5539,6 +5869,7 @@ ${originalText}
         state.news.filter.selectedTags = state.news.filter.selectedTags.filter((t) => t !== extractedTag);
       }
     }
+    updateFilterButtonState();
     if (dom.newsQ) dom.newsQ.value = state.news.q;
     renderNews();
   };
@@ -5754,6 +6085,12 @@ ${originalText}
     }
     if (action === "refreshNews") {
       return refreshNews();
+    }
+    if (action === "createNewSession") {
+      return createBlankSession();
+    }
+    if (action === "createNewsSession") {
+      return createNewsSession();
     }
     if (action === "toggleTag") {
       // 拖拽排序时会触发 click（尤其是移动端），这里直接吞掉
@@ -6967,6 +7304,9 @@ ${originalText}
         // ignore localStorage errors
       }
     }, 500);
+    
+    // 初始化筛选按钮状态
+    updateFilterButtonState();
   };
 
   window.addEventListener("hashchange", applyRoute);
