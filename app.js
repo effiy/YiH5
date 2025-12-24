@@ -1830,11 +1830,12 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
     const quotePairs = [
       ['"', '"'],
       ["'", "'"],
-      ["“", "”"],
-      ["‘", "’"],
+      [""", """],
+      ["'", "'"],
       ["「", "」"],
       ["『", "』"],
       ["《", "》"],
+      ['`', '`'],
     ];
 
     for (const [startQuote, endQuote] of quotePairs) {
@@ -1844,8 +1845,16 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
       }
     }
 
-    // 去掉模型常见的前缀说明文案
+    // 去掉模型常见的前缀说明文案（使用正则匹配，更灵活）
     const prefixes = [
+      /^优化后的[内容上下文]：?\s*/i,
+      /^以下是优化后的[内容上下文]：?\s*/i,
+      /^优化结果：?\s*/i,
+      /^优化后的文本：?\s*/i,
+      /^优化后的[内容上下文]如下：?\s*/i,
+      /^[内容上下文]优化如下：?\s*/i,
+      /^以下是[优化后的]?[内容上下文]：?\s*/i,
+      /^[内容上下文][已]?优化[结果]?：?\s*/i,
       "优化后：",
       "优化后内容：",
       "优化后描述：",
@@ -1858,13 +1867,103 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
     ];
 
     for (const prefix of prefixes) {
-      if (text.startsWith(prefix)) {
-        text = text.slice(prefix.length).trim();
-        break;
+      if (typeof prefix === 'string') {
+        if (text.startsWith(prefix)) {
+          text = text.slice(prefix.length).trim();
+          break;
+        }
+      } else {
+        text = text.replace(prefix, '').trim();
+        if (text !== String(rawText || "").trim()) break;
       }
     }
 
     return text.trim();
+  };
+
+  // 深度清理和优化文本内容（参考 YiPet 的 _cleanAndOptimizeText）
+  // 去除HTML标签、无意义内容，保留核心信息
+  const cleanAndOptimizeText = (text) => {
+    if (!text || typeof text !== 'string') return '';
+    
+    let cleaned = text;
+    
+    // 1. 去除HTML标签（保留代码块中的内容）
+    // 先保护代码块
+    const codeBlocks = [];
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, (match) => {
+      const placeholder = `__CODE_BLOCK_${codeBlocks.length}__`;
+      codeBlocks.push(match);
+      return placeholder;
+    });
+    
+    // 去除所有HTML标签，但保留标签内的文本内容
+    cleaned = cleaned.replace(/<[^>]+>/g, '');
+    
+    // 恢复代码块
+    codeBlocks.forEach((block, index) => {
+      cleaned = cleaned.replace(`__CODE_BLOCK_${index}__`, block);
+    });
+    
+    // 2. 去除HTML实体编码（如 &nbsp; &lt; &gt; 等）
+    cleaned = cleaned.replace(/&nbsp;/g, ' ');
+    cleaned = cleaned.replace(/&lt;/g, '<');
+    cleaned = cleaned.replace(/&gt;/g, '>');
+    cleaned = cleaned.replace(/&amp;/g, '&');
+    cleaned = cleaned.replace(/&quot;/g, '"');
+    cleaned = cleaned.replace(/&#39;/g, "'");
+    cleaned = cleaned.replace(/&[a-z]+;/gi, '');
+    
+    // 3. 去除无意义的重复内容
+    // 去除重复的换行（保留代码块中的）
+    const codeBlockPlaceholders = [];
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, (match) => {
+      const placeholder = `__CODE_${codeBlockPlaceholders.length}__`;
+      codeBlockPlaceholders.push(match);
+      return placeholder;
+    });
+    
+    // 去除多个连续换行（保留段落间距）
+    cleaned = cleaned.replace(/\n{4,}/g, '\n\n\n');
+    
+    // 恢复代码块
+    codeBlockPlaceholders.forEach((block, index) => {
+      cleaned = cleaned.replace(`__CODE_${index}__`, block);
+    });
+    
+    // 4. 去除无意义的空白字符（但保留代码块和列表中的）
+    // 保护代码块和列表项
+    const protectedBlocks = [];
+    cleaned = cleaned.replace(/(```[\s\S]*?```|^[\s]*[-*+]\s+|^\s*\d+\.\s+)/gm, (match) => {
+      const placeholder = `__PROTECTED_${protectedBlocks.length}__`;
+      protectedBlocks.push(match);
+      return placeholder;
+    });
+    
+    // 合并多个空格为一个（但保留行首缩进）
+    cleaned = cleaned.replace(/[ \t]+/g, (match, offset, string) => {
+      // 如果是在行首，保留一个空格或制表符
+      const lineStart = string.lastIndexOf('\n', offset - 1) + 1;
+      if (offset === lineStart) {
+        return match.includes('\t') ? '\t' : ' ';
+      }
+      return ' ';
+    });
+    
+    // 恢复受保护的内容
+    protectedBlocks.forEach((block, index) => {
+      cleaned = cleaned.replace(`__PROTECTED_${index}__`, block);
+    });
+    
+    // 5. 去除无意义的标记和符号
+    // 去除多余的Markdown标记（但保留有效的）
+    cleaned = cleaned.replace(/\*\*\*\*/g, ''); // 四个星号
+    cleaned = cleaned.replace(/^#{7,}\s+/gm, ''); // 超过6级的标题标记
+    
+    // 6. 清理首尾空白
+    cleaned = cleaned.trim();
+    
+    return cleaned;
   };
 
   const ensureActiveSessionForContext = () => {
@@ -1936,28 +2035,92 @@ import { renderMarkdown, renderMermaidIn } from "./markdown.js";
     const btn = document.querySelector('button[data-action="optimizePageContext"]');
 
     await withButtonLoading(btn, "优化中...", async () => {
-      const systemPrompt = `你是一个专业的网页内容整理和文案优化专家，擅长：
-1. 在不改变核心含义的前提下，优化表达，让句子更简洁、自然、易读
-2. 合理调整段落结构，让重点更突出、层次更清晰
-3. 尽量保留原有的 Markdown 结构（标题、列表、代码块等）
-4. 避免主观评价和无关扩写，只做必要的润色和结构优化
+      // 构建优化提示词（参考 YiPet，强调保留原文、去除无意义内容、优化HTML标签）
+      const systemPrompt = `你是一个专业的文档内容优化专家，擅长：
+1. 保留原文的核心信息和完整内容，不丢失重要信息
+2. 去除无意义的重复内容、冗余描述和无关信息
+3. 优化和清理HTML标签，将HTML内容转换为清晰的Markdown格式
+4. 优化文档结构和层次，使其逻辑清晰、层次分明
+5. 改进语言表达，使其更加流畅自然、易于理解
+6. 提升可读性，优化段落组织和过渡
+7. 确保Markdown格式规范美观，标题层级清晰
 
-请根据下面提供的网页上下文内容进行语言和结构优化。`;
+请优化页面上下文内容，重点保留原文信息，去除无意义内容，优化HTML标签。`;
 
-      const userPrompt = `请在尽量保持原有结构和 Markdown 格式的前提下，优化下面的网页上下文，使其更通顺、重点更突出，适合作为 AI 的参考上下文：
+      const userPrompt = `请优化以下页面上下文内容，要求：
 
-${current.substring(0, 4000)}
+【核心要求】
+1. **必须保留原文的所有核心信息和完整内容**，不能丢失重要信息
+2. **去除无意义的重复内容、冗余描述、无关信息**（如重复的导航链接、广告文本、无意义的装饰性内容等）
+3. **优化HTML标签**：将HTML标签转换为清晰的Markdown格式，去除无用的HTML标签，但保留文本内容
+4. **优化文档结构**：使逻辑更清晰、层次更分明
+5. **改进语言表达**：使其更加流畅自然
+6. **提升可读性**：优化段落组织和过渡
+7. **保持Markdown格式有效性**：确保标题层级清晰，段落之间过渡自然
 
-请直接返回优化后的完整文本，不要添加任何额外说明、前后缀标题或引号。`;
+【注意事项】
+- 不要添加原文中没有的新内容
+- 不要改变原文的核心意思
+- 去除HTML标签时，要保留标签内的文本内容
+- 去除无意义的导航、广告、重复性内容
+- 保持Markdown格式的规范性
+
+原始内容：
+${current}
+
+请直接返回优化后的Markdown内容，不要包含任何说明文字、引号或其他格式标记。`;
 
       const result = await callPromptOnce(systemPrompt, userPrompt);
-      const cleaned = cleanOptimizedText(result);
-      if (!cleaned || cleaned === current) {
-        window.alert("文本已经是最优状态，无需优化。");
+      
+      // 先进行基础清理
+      let cleaned = cleanOptimizedText(result);
+      
+      // 再进行深度清理和优化（去除HTML标签、实体编码等）
+      cleaned = cleanAndOptimizeText(cleaned);
+      
+      // 验证优化后的文本是否有效
+      if (!cleaned || cleaned.length < 10) {
+        throw new Error('优化后的文本过短，可能优化失败，请重试');
+      }
+      
+      // 如果优化后的文本与原文完全相同，给出提示
+      if (cleaned === current) {
+        const originalCharCount = current.length;
+        window.alert(`优化后的内容与原文相同（${originalCharCount}字），已保持原内容。`);
         return;
       }
+      
+      // 保存原始字符数用于显示
+      const originalCharCount = current.length;
+      const optimizedCharCount = cleaned.length;
+      
+      // 更新页面上下文内容
       s.pageContent = cleaned;
       renderContextSheet();
+      
+      // 显示优化完成提示，包含字符数变化信息
+      const changeInfo = originalCharCount !== optimizedCharCount 
+        ? `${originalCharCount}字 → ${optimizedCharCount}字` 
+        : `${optimizedCharCount}字`;
+      
+      // 使用 showToast 显示优化完成信息
+      showToast(`优化完成 ${changeInfo}`, 'success');
+    }).catch((error) => {
+      // 提供更详细的错误信息
+      let errorMessage = '优化失败，请稍后重试';
+      if (error.message) {
+        if (error.message.includes('HTTP error') || error.message.includes('HTTP')) {
+          errorMessage = '网络请求失败，请检查网络连接';
+        } else if (error.message.includes('无法解析')) {
+          errorMessage = '服务器响应格式异常，请稍后重试';
+        } else if (error.message.includes('过短')) {
+          errorMessage = error.message;
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      console.error('优化上下文失败:', error);
+      window.alert(errorMessage);
     });
   };
 
