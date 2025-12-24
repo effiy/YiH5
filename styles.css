@@ -120,36 +120,28 @@ input{border:0;outline:none}
 
 /* 搜索行中的图标按钮 */
 .searchRow .iconbtn{
-  width:40px;
-  height:40px;
-  border-radius:12px;
+  width:36px;
+  height:36px;
+  border-radius:10px;
   flex:none;
 }
 .searchRow .iconbtn svg{
-  width:20px;
-  height:20px;
+  width:18px;
+  height:18px;
 }
 
 /* 新建按钮样式 */
 .iconbtn--new{
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-  color: white !important;
-  border: none !important;
-  box-shadow: 0 2px 6px rgba(118, 75, 162, 0.2) !important;
+  background:#f6f6f6;
+  color:#2b2b2b;
 }
 .iconbtn--new:active{
-  transform: scale(0.96) !important;
-  box-shadow: 0 1px 3px rgba(118, 75, 162, 0.25) !important;
+  background:rgba(0,0,0,.08);
 }
 /* 桌面端悬浮效果 */
 @media (hover: hover) {
   .iconbtn--new:hover{
-    background: linear-gradient(135deg, #764ba2 0%, #6a3d9a 100%) !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 12px rgba(118, 75, 162, 0.35) !important;
-  }
-  .iconbtn--new:hover:active{
-    transform: translateY(0) scale(0.96) !important;
+    background:rgba(0,0,0,.04);
   }
 }
 
@@ -825,10 +817,10 @@ input{border:0;outline:none}
   overflow:hidden;
 }
 
-.searchCard{padding:12px}
+.searchCard{padding:10px}
 .searchRow{
   display:flex;
-  gap:8px;
+  gap:6px;
   align-items:stretch;
   flex-wrap:nowrap;
 }
@@ -838,9 +830,9 @@ input{border:0;outline:none}
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: #f6f6f6;
   transition: background-color 0.2s ease, box-shadow 0.2s ease;
   border: 1px solid transparent;
@@ -861,8 +853,8 @@ input{border:0;outline:none}
 }
 /* 搜索图标样式 */
 .searchBox__icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: none;
   fill: #9b9b9b;
   transition: fill 0.2s ease, transform 0.15s ease;
@@ -886,11 +878,11 @@ input{border:0;outline:none}
 .searchBox__input{
   flex:1;
   background:transparent;
-  font-size:16px;
+  font-size:15px;
 }
 .searchBox__clear{
-  width:24px;height:24px;
-  border-radius:12px;
+  width:22px;height:22px;
+  border-radius:11px;
   color:#9b9b9b;
   display:grid;place-items:center;
 }
