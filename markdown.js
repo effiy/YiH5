@@ -3,10 +3,12 @@
  * 处理 Markdown 和 Mermaid 的渲染
  */
 
+import { escapeHtml, isSafeUrl } from "./utils.js";
+
 // ---------- Markdown 配置 ----------
 let markedConfigured = false;
 
-const ensureMarkedConfigured = (escapeHtml, isSafeUrl) => {
+const ensureMarkedConfigured = () => {
   if (markedConfigured) return;
   if (typeof window.marked === "undefined" || typeof window.marked.parse !== "function") return;
   try {
@@ -45,13 +47,13 @@ const ensureMarkedConfigured = (escapeHtml, isSafeUrl) => {
 };
 
 // ---------- Markdown 渲染 ----------
-export const renderMarkdown = (text, escapeHtml, isSafeUrl) => {
+export const renderMarkdown = (text) => {
   const raw = String(text ?? "").trim();
   if (!raw) return "";
 
   if (typeof window.marked !== "undefined" && typeof window.marked.parse === "function") {
     try {
-      ensureMarkedConfigured(escapeHtml, isSafeUrl);
+      ensureMarkedConfigured();
       let html = window.marked.parse(raw);
       // 处理渲染后的 HTML：将非 http 开头的链接转换为纯文本
       if (html) {

@@ -1,3 +1,7 @@
+// 导入工具函数和模块
+import { escapeHtml, isSafeUrl, isIOS } from "./utils.js";
+import { renderMarkdown, renderMermaidIn } from "./markdown.js";
+
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -223,50 +227,6 @@
     return welcomeHtml;
   };
 
-  const replaceMermaidCodeBlocks = (root) => {
-    if (!root) return [];
-    const codeBlocks = root.querySelectorAll(
-      "pre > code.language-mermaid, pre > code.language-mmd, code.language-mermaid, code.language-mmd",
-    );
-    const created = [];
-
-    codeBlocks.forEach((code, idx) => {
-      // 避免重复处理
-      if (code.classList.contains("mermaid-processed")) return;
-
-      const pre = code.closest("pre");
-      const source = (code.textContent || "").trim();
-      if (!source) return;
-
-      const mermaidDiv = document.createElement("div");
-      mermaidDiv.className = "mermaid";
-      mermaidDiv.id = `mermaid-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 8)}`;
-      mermaidDiv.textContent = source;
-      mermaidDiv.setAttribute("data-mermaid-source", source);
-
-      code.classList.add("mermaid-processed");
-      if (pre && pre.parentNode) {
-        pre.parentNode.replaceChild(mermaidDiv, pre);
-      } else if (code.parentNode) {
-        code.parentNode.replaceChild(mermaidDiv, code);
-      }
-      created.push(mermaidDiv);
-    });
-
-    return created;
-  };
-
-  const renderMermaidIn = async (root) => {
-    if (!initMermaidOnce()) return;
-    const nodes = replaceMermaidCodeBlocks(root);
-    if (nodes.length === 0) return;
-    try {
-      // mermaid.run 支持直接渲染 nodes
-      await window.mermaid.run({ nodes });
-    } catch (e) {
-      console.warn("[YiH5] Mermaid 渲染失败：", e);
-    }
-  };
 
   const dateUtil = {
     formatYMD(d) {
