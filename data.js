@@ -102,14 +102,52 @@ export const normalizeFaqs = (list) => {
 export const buildSessionPayload = (s) => {
   const now = Date.now();
   const messagesForBackend = (s.messages || []).map((m) => {
-    const role = normalizeRole(m);
+    if (!m) return null;
+    
+    // 统一 type 字段
+    let type;
+    if (m.type) {
+      type = m.type;
+    } else if (m.role) {
+      const role = String(m.role).toLowerCase();
+      if (role === "user" || role === "me") {
+        type = "user";
+      } else if (role === "assistant" || role === "pet" || role === "bot" || role === "ai") {
+        type = "pet";
+      } else {
+        type = "user"; // 默认
+      }
+    } else {
+      // 使用 normalizeRole 作为后备
+      const role = normalizeRole(m);
+      type = role === "user" ? "user" : "pet";
+    }
+    
+    // 统一 content 字段
+    const content = String(m.content || m.text || m.message || "").trim();
+    
+    // 统一 timestamp 字段（转换为毫秒数）
+    let timestamp = m.ts || m.timestamp || m.createdTime || m.createdAt || now;
+    if (typeof timestamp === "string") {
+      const date = new Date(timestamp);
+      timestamp = isNaN(date.getTime()) ? now : date.getTime();
+    } else if (typeof timestamp === "number") {
+      // 如果是秒级时间戳，转换为毫秒
+      if (timestamp < 1e12) {
+        timestamp = timestamp * 1000;
+      }
+    }
+    
+    // 统一 imageDataUrl 字段
+    const imageDataUrl = m.imageDataUrl || m.image || undefined;
+    
     return {
-      type: role === "user" ? "user" : "pet",
-      content: normalizeText(m),
-      timestamp: m.ts || m.timestamp || now,
-      imageDataUrl: m.imageDataUrl || m.image || undefined,
+      type: type,
+      content: content,
+      timestamp: timestamp,
+      imageDataUrl: imageDataUrl,
     };
-  });
+  }).filter(msg => msg && msg.content); // 过滤空内容和null
 
   return {
     id: String(s.id),
